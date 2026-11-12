@@ -1,0 +1,16 @@
+Example input for Shipday. Paste a real update from your factory or forwarder in its place.
+
+From: ops@harborline-forwarding.example
+Subject: Booking HLF-24117 / 480 cartons "Tidewater" board game / ETA update
+
+Hi team,
+
+Production of the remaining 480 units of Tidewater finished on 9 Nov and the goods passed final QC on 10 Nov.
+Cartons were loaded at Yantian on 12 Nov onto MSC ARIANE, voyage 547E.
+Current ETA Long Beach is 26 Nov. After customs and drayage we expect delivery to your Reno warehouse on 1 Dec.
+
+Please plan fulfilment from 2 Dec.
+
+Regards,
+Mei Lin
+Harborline Forwarding

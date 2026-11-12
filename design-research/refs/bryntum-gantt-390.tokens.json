@@ -1,0 +1,67 @@
+{
+ "title": "Bryntum Gantt - Basic Gantt chart demo",
+ "h1": {
+  "text": "Basic Gantt chart demo\nENTERPRISE",
+  "font": "Montserrat, Poppins, \"Helvetica Neue\", Arial, Helvetica, sans-serif",
+  "size": "15.4px",
+  "weight": "600",
+  "tracking": "normal",
+  "leading": "normal",
+  "color": "rgb(232, 232, 232)",
+  "bg": "rgba(0, 0, 0, 0)",
+  "radius": "0px",
+  "padding": "0px",
+  "border": "0px none rgb(232, 232, 232)",
+  "transform": "none",
+  "features": "normal"
+ },
+ "h2": null,
+ "h3": null,
+ "body": {
+  "text": "Skip to content\nBasic Gantt chart demo\nENTERPRISE\nName\nSun 1",
+  "font": "Montserrat, Poppins, \"Helvetica Neue\", Arial, Helvetica, sans-serif",
+  "size": "14px",
+  "weight": "400",
+  "tracking": "normal",
+  "leading": "normal",
+  "color": "rgb(255, 255, 255)",
+  "bg": "rgb(32, 32, 32)",
+  "radius": "0px",
+  "padding": "0px",
+  "border": "0px none rgb(255, 255, 255)",
+  "transform": "none",
+  "features": "normal"
+ },
+ "p": null,
+ "a": {
+  "text": "Skip to content",
+  "font": "Montserrat, Poppins, \"Helvetica Neue\", Arial, Helvetica, sans-serif",
+  "size": "16.8px",
+  "weight": "400",
+  "tracking": "normal",
+  "leading": "normal",
+  "color": "rgb(26, 26, 26)",
+  "bg": "color(srgb 0.294118 0.626667 0.918431)",
+  "radius": "10.08px",
+  "padding": "16px",
+  "border": "0px none rgb(26, 26, 26)",
+  "transform": "none",
+  "features": "normal"
+ },
+ "button": null,
+ "input": null,
+ "loadedFonts": [
+  "Font Awesome 6 Free",
+  "Poppins",
+  "Montserrat"
+ ],
+ "htmlBg": "rgba(0, 0, 0, 0)",
+ "textLen": 972,
+ "height": 844,
+ "url": "https://bryntum.com/products/gantt/examples/basic/",
+ "viewport": [
+  390,
+  844
+ ],
+ "lumaStddev": 36.2
+}
