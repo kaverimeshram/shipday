@@ -53,7 +53,19 @@ CREATE TABLE IF NOT EXISTS charge_attempts (
   issue TEXT, created_at TEXT NOT NULL, completed_at TEXT,
   UNIQUE(reservation_id, paypal_request_id)
 );
+CREATE TABLE IF NOT EXISTS refunds (
+  id TEXT PRIMARY KEY, reservation_id TEXT NOT NULL REFERENCES reservations(id),
+  charge_attempt_id TEXT NOT NULL UNIQUE REFERENCES charge_attempts(id), capture_id TEXT NOT NULL UNIQUE,
+  paypal_request_id TEXT NOT NULL UNIQUE, refund_id TEXT UNIQUE,
+  status TEXT NOT NULL CHECK(status IN ('PENDING','COMPLETED','FAILED')),
+  reason TEXT NOT NULL, issue TEXT, created_at TEXT NOT NULL, completed_at TEXT
+);
 `);
+
+export function hasLiveCapture(reservationId: string): boolean {
+  return Boolean(db.prepare(`SELECT 1 FROM charge_attempts a WHERE a.reservation_id = ? AND a.status = 'COMPLETED'
+    AND NOT EXISTS (SELECT 1 FROM refunds f WHERE f.charge_attempt_id = a.id AND f.status = 'COMPLETED')`).get(reservationId));
+}
 
 export function campaignAllocations(campaignId: string) {
   return db.prepare(`SELECT a.reservation_id AS reservationId, a.wave_id AS waveId, a.qty FROM reservation_allocations a

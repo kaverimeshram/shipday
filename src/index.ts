@@ -7,10 +7,10 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypt
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { z } from 'zod';
-import { campaignAllocations, db } from './db.js';
+import { campaignAllocations, db, hasLiveCapture } from './db.js';
 import { AIError, extractSupply, explainPlan, type SupplyExtraction } from './ai.js';
-import { chargeRefusal, ganttDependencies, ganttTasks, isChargeEligible, milestones, moveWave, planWaves, type Milestone } from './domain.js';
-import { PayPalError, addTracking, captureOrder, createPaymentToken, createSetupToken, createVaultOrder, deletePaymentToken, getOrder, getPaymentToken, getPaymentTokenForCancelCheck, newRequestId, verifyWebhookSignature, type PayPalOrder } from './paypal.js';
+import { chargeRefusal, ganttDependencies, ganttTasks, isChargeEligible, milestones, moveWave, outsideChargeWindow, planWaves, type Milestone } from './domain.js';
+import { PayPalError, addTracking, captureOrder, createPaymentToken, createSetupToken, createVaultOrder, deletePaymentToken, getOrder, getPaymentToken, getPaymentTokenForCancelCheck, getRefund, newRequestId, refundCapture, verifyWebhookSignature, type PayPalOrder } from './paypal.js';
 import { paypalPolicy } from './policy.js';
 
 const app = new Hono();
@@ -208,7 +208,8 @@ app.get('/api/reservations/:id', c => {
     c.name AS campaign_name, c.ship_date AS campaign_ship_date, c.charge_window_days, c.currency, c.price_cents
     FROM reservations r JOIN campaigns c ON c.id = r.campaign_id LEFT JOIN waves w ON w.id = r.wave_id WHERE r.id = ?`).get(c.req.param('id')) as any;
   if (!row) return c.json({ error: 'Reservation not found.' }, 404);
-  return c.json({ id: row.id, qty: row.qty, position: row.position, status: row.status, captureId: row.capture_id, issue: row.paypal_issue, campaignName: row.campaign_name, shipDate: row.ship_date || row.campaign_ship_date, chargeWindowDays: row.charge_window_days, currency: row.currency, amountCents: row.price_cents * row.qty, canCancel: ['PENDING', 'RESERVED'].includes(row.status) });
+  const refund = db.prepare("SELECT refund_id, reason, completed_at FROM refunds WHERE reservation_id = ? AND status = 'COMPLETED' ORDER BY completed_at DESC LIMIT 1").get(row.id) as { refund_id: string; reason: string; completed_at: string } | undefined;
+  return c.json({ refund: refund ? { refundId: refund.refund_id, reason: refund.reason, refundedAt: refund.completed_at } : null, id: row.id, qty: row.qty, position: row.position, status: row.status, captureId: row.capture_id, issue: row.paypal_issue, campaignName: row.campaign_name, shipDate: row.ship_date || row.campaign_ship_date, chargeWindowDays: row.charge_window_days, currency: row.currency, amountCents: row.price_cents * row.qty, canCancel: ['PENDING', 'RESERVED'].includes(row.status) });
 });
 
 app.get('/api/campaigns/:slug/desk', c => {
@@ -216,10 +217,14 @@ app.get('/api/campaigns/:slug/desk', c => {
   if (!asCampaign(campaign)) return campaign;
   const waves = db.prepare('SELECT * FROM waves WHERE campaign_id = ? ORDER BY ship_date, number').all(campaign.id) as any[];
   const allocations = campaignAllocations(campaign.id);
-  const reservations = db.prepare('SELECT * FROM reservations WHERE campaign_id = ? ORDER BY position').all(campaign.id) as any[];
+  const reservations = db.prepare(`SELECT r.*, a.completed_at AS captured_at, w.ship_date AS wave_ship_date,
+    (SELECT f.refund_id FROM refunds f WHERE f.reservation_id = r.id AND f.status = 'COMPLETED' ORDER BY f.completed_at DESC LIMIT 1) AS refund_id
+    FROM reservations r LEFT JOIN charge_attempts a ON a.capture_id = r.capture_id AND a.status = 'COMPLETED' LEFT JOIN waves w ON w.id = r.wave_id
+    WHERE r.campaign_id = ? ORDER BY r.position`).all(campaign.id) as any[];
   const updates = db.prepare('SELECT * FROM supply_updates WHERE campaign_id = ? ORDER BY event_date, confirmed_at').all(campaign.id) as any[];
   const { reserved } = campaignAvailability(campaign.id);
-  return c.json({ campaign: { id: campaign.id, slug: campaign.slug, name: campaign.name, imageUrl: campaign.image_url, priceCents: campaign.price_cents, currency: campaign.currency, quantity: campaign.quantity, shipDate: campaign.ship_date, chargeWindowDays: campaign.charge_window_days }, reserved, available: Math.max(0, campaign.quantity - reserved), waves: waves.map(w => ({ id: w.id, number: w.number, units: w.units, shipDate: w.ship_date, dateOverride: w.date_override })), allocations, reservations: reservations.map(r => ({ id: r.id, email: r.email, qty: r.qty, position: r.position, status: r.status, waveId: r.wave_id, captureId: r.capture_id, orderId: r.paypal_order_id, issue: r.paypal_issue, trackingNumber: r.tracking_number, carrier: r.carrier })), updates: updates.map(u => ({ id: u.id, units: u.units, milestone: u.milestone, date: u.event_date, origin: u.origin, destination: u.destination, vesselOrCarrier: u.vessel_or_carrier, quotes: JSON.parse(u.quotes), confidence: u.confidence, confirmedAt: u.confirmed_at })), tasks: ganttTasks(waves.map(w => ({ id: w.id, number: w.number, units: w.units, shipDate: w.ship_date })), campaign.charge_window_days), dependencies: ganttDependencies(waves.map(w => ({ id: w.id, number: w.number, units: w.units, shipDate: w.ship_date }))) });
+  return c.json({ campaign: { id: campaign.id, slug: campaign.slug, name: campaign.name, imageUrl: campaign.image_url, priceCents: campaign.price_cents, currency: campaign.currency, quantity: campaign.quantity, shipDate: campaign.ship_date, chargeWindowDays: campaign.charge_window_days }, reserved, available: Math.max(0, campaign.quantity - reserved), waves: waves.map(w => ({ id: w.id, number: w.number, units: w.units, shipDate: w.ship_date, dateOverride: w.date_override })), allocations, reservations: reservations.map(r => ({ id: r.id, email: r.email, qty: r.qty, position: r.position, status: r.status, waveId: r.wave_id, captureId: r.capture_id, orderId: r.paypal_order_id, issue: r.paypal_issue, trackingNumber: r.tracking_number, carrier: r.carrier, capturedAt: r.captured_at, refundId: r.refund_id,
+    outsideWindow: r.status === 'CHARGED' && Boolean(r.captured_at && r.wave_ship_date) && outsideChargeWindow(r.captured_at, r.wave_ship_date, campaign.charge_window_days) })), updates: updates.map(u => ({ id: u.id, units: u.units, milestone: u.milestone, date: u.event_date, origin: u.origin, destination: u.destination, vesselOrCarrier: u.vessel_or_carrier, quotes: JSON.parse(u.quotes), confidence: u.confidence, confirmedAt: u.confirmed_at })), tasks: ganttTasks(waves.map(w => ({ id: w.id, number: w.number, units: w.units, shipDate: w.ship_date })), campaign.charge_window_days), dependencies: ganttDependencies(waves.map(w => ({ id: w.id, number: w.number, units: w.units, shipDate: w.ship_date }))) });
 });
 
 app.post('/api/campaigns/:slug/supply/extract', async c => {
@@ -289,6 +294,26 @@ app.post('/api/campaigns/:slug/waves/:waveId/charge', async c => {
   return c.json({ eligible: true, results });
 });
 
+app.post('/api/campaigns/:slug/waves/:waveId/refund', async c => {
+  const campaign = requireCampaign(c, c.req.param('slug'), true);
+  if (!asCampaign(campaign)) return campaign;
+  const wave = db.prepare('SELECT * FROM waves WHERE id = ? AND campaign_id = ?').get(c.req.param('waveId'), campaign.id) as any;
+  if (!wave) return c.json({ error: 'Wave not found.' }, 404);
+  const rows = db.prepare(`SELECT r.id, r.capture_id, a.id AS attempt_id, a.completed_at FROM reservations r
+    JOIN charge_attempts a ON a.capture_id = r.capture_id AND a.status = 'COMPLETED'
+    WHERE r.campaign_id = ? AND r.wave_id = ? AND r.status = 'CHARGED' ORDER BY r.position`).all(campaign.id, wave.id) as { id: string; capture_id: string; attempt_id: string; completed_at: string }[];
+  const late = rows.filter(row => outsideChargeWindow(row.completed_at, wave.ship_date, campaign.charge_window_days));
+  if (!late.length) return c.json({ error: 'No charged reservation in this wave ships outside its charge window.' }, 409);
+  const results = [];
+  for (const row of late) {
+    const reason = `Ship date moved to ${wave.ship_date}, more than ${campaign.charge_window_days} days after the ${row.completed_at.slice(0, 10)} charge.`;
+    results.push(await refundCharge(row.id, row.attempt_id, row.capture_id, reason));
+  }
+  refreshWaveData(campaign);
+  emit('refund', campaign.slug);
+  return c.json({ results });
+});
+
 app.post('/api/campaigns/:slug/waves/:waveId/tracking', async c => {
   const campaign = requireCampaign(c, c.req.param('slug'), true);
   if (!asCampaign(campaign)) return campaign;
@@ -299,6 +324,7 @@ app.post('/api/campaigns/:slug/waves/:waveId/tracking', async c => {
     const row = db.prepare("SELECT * FROM reservations WHERE id = ? AND campaign_id = ? AND status IN ('CHARGED','SHIPPED')").get(item.reservationId, campaign.id) as any;
     if (!row?.paypal_order_id || !row.capture_id || !row.wave_id) { results.push({ id: item.reservationId, error: 'A completed capture is required before tracking can be added.' }); continue; }
     if (row.status === 'SHIPPED') { results.push({ id: row.id, status: 'SHIPPED', trackingNumber: row.tracking_number }); continue; }
+    if (db.prepare("SELECT 1 FROM refunds WHERE reservation_id = ? AND status = 'PENDING'").get(row.id)) { results.push({ id: row.id, error: 'A refund is in progress for this charge.' }); continue; }
     try {
       const requestId = row.tracking_request_id || newRequestId();
       db.prepare('UPDATE reservations SET tracking_request_id = ?, tracking_number = ?, carrier = ? WHERE id = ? AND tracking_request_id IS NULL').run(requestId, item.trackingNumber, item.carrier, row.id);
@@ -398,8 +424,7 @@ function persistPlan(campaign: CampaignRow, plan: ReturnType<typeof planWaves>, 
 }
 
 async function chargeReservation(campaign: CampaignRow, reservation: any) {
-  const existingCapture = db.prepare('SELECT 1 FROM charge_attempts WHERE reservation_id = ? AND status = \'COMPLETED\'').get(reservation.id);
-  const refusal = chargeRefusal(reservation.status, Boolean(reservation.capture_id || existingCapture));
+  const refusal = chargeRefusal(reservation.status, Boolean(reservation.capture_id || hasLiveCapture(reservation.id)));
   if (refusal) return { id: reservation.id, status: reservation.status, error: refusal };
   let attempt = db.prepare("SELECT * FROM charge_attempts WHERE reservation_id = ? AND status = 'PENDING' ORDER BY created_at DESC LIMIT 1").get(reservation.id) as any;
   if (!attempt) {
@@ -446,6 +471,48 @@ async function chargeReservation(campaign: CampaignRow, reservation: any) {
   }
 }
 
+async function refundCharge(reservationId: string, attemptId: string, captureId: string, reason: string) {
+  let refund = db.prepare('SELECT * FROM refunds WHERE charge_attempt_id = ?').get(attemptId) as any;
+  if (!refund) {
+    refund = { id: randomUUID(), paypal_request_id: newRequestId(), refund_id: null, status: 'PENDING' };
+    db.prepare(`INSERT INTO refunds (id, reservation_id, charge_attempt_id, capture_id, paypal_request_id, status, reason, created_at)
+      VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?)`).run(refund.id, reservationId, attemptId, captureId, refund.paypal_request_id, reason, nowIso());
+  }
+  if (refund.status !== 'PENDING') return { id: reservationId, status: refund.status === 'COMPLETED' ? 'REFUNDED' : 'REFUND_FAILED', refundId: refund.refund_id, issue: refund.issue };
+  try {
+    if (!refund.refund_id) {
+      const created = await refundCapture(captureId, refund.paypal_request_id);
+      db.prepare('UPDATE refunds SET refund_id = ? WHERE id = ?').run(created.id, refund.id);
+      refund.refund_id = created.id;
+    }
+    for (let i = 0; i < 6; i++) {
+      const read = await getRefund(refund.refund_id);
+      if (read.status === 'COMPLETED') {
+        db.exec('BEGIN IMMEDIATE');
+        try {
+          db.prepare("UPDATE refunds SET status = 'COMPLETED', completed_at = ? WHERE id = ?").run(nowIso(), refund.id);
+          db.prepare(`UPDATE reservations SET status = 'RESERVED', capture_id = NULL, paypal_order_id = NULL, paypal_issue = NULL,
+            tracking_request_id = NULL, tracking_number = NULL, carrier = NULL WHERE id = ? AND status = 'CHARGED'`).run(reservationId);
+          db.exec('COMMIT');
+        } catch (error) { db.exec('ROLLBACK'); throw error; }
+        return { id: reservationId, status: 'REFUNDED', refundId: read.id };
+      }
+      if (['FAILED', 'CANCELLED'].includes(read.status)) {
+        db.prepare("UPDATE refunds SET status = 'FAILED', issue = ? WHERE id = ?").run(read.status_details?.reason || read.status, refund.id);
+        return { id: reservationId, status: 'REFUND_FAILED', refundId: read.id, issue: read.status_details?.reason || read.status };
+      }
+      await new Promise(resolve => setTimeout(resolve, Math.min(500 * 2 ** i, 4000)));
+    }
+    return { id: reservationId, status: 'REFUND_PENDING', refundId: refund.refund_id, error: 'PayPal has not completed the refund yet. Shipday will keep checking.' };
+  } catch (error) {
+    if (error instanceof PayPalError && [400, 403, 404, 422].includes(error.status)) {
+      db.prepare("UPDATE refunds SET status = 'FAILED', issue = ? WHERE id = ?").run(error.issue || error.message, refund.id);
+      return { id: reservationId, status: 'REFUND_FAILED', issue: error.issue || error.message };
+    }
+    return { id: reservationId, status: 'REFUND_PENDING', error: error instanceof Error ? error.message : 'PayPal refund is still being reconciled.' };
+  }
+}
+
 function markDeclined(attempt: any, reservation: any, issue: string) {
   db.prepare("UPDATE charge_attempts SET status = 'DECLINED', issue = ? WHERE id = ?").run(issue, attempt.id);
   db.prepare("UPDATE reservations SET status = 'DECLINED', paypal_issue = ? WHERE id = ? AND status != 'CHARGED'").run(issue, reservation.id);
@@ -473,6 +540,15 @@ async function reconcilePending() {
         emit('charge', attempt.slug);
       }
     } catch (error) { console.error('Shipday charge reconciliation failed', { name: error instanceof Error ? error.name : 'Error' }); }
+  }
+  const refunds = db.prepare(`SELECT f.*, c.id AS campaign_id FROM refunds f JOIN reservations r ON r.id = f.reservation_id JOIN campaigns c ON c.id = r.campaign_id WHERE f.status = 'PENDING'`).all() as any[];
+  for (const refund of refunds) {
+    const result = await refundCharge(refund.reservation_id, refund.charge_attempt_id, refund.capture_id, refund.reason);
+    if (result.status === 'REFUNDED') {
+      const campaign = db.prepare('SELECT * FROM campaigns WHERE id = ?').get(refund.campaign_id) as CampaignRow;
+      refreshWaveData(campaign);
+      emit('refund', campaign.slug);
+    }
   }
 }
 

@@ -57,6 +57,10 @@ export function isChargeEligible(shipDate: string, now: Date, windowDays: number
   return today >= opens && today <= ship;
 }
 
+export function outsideChargeWindow(capturedAt: string, shipDate: string, windowDays: number): boolean {
+  return dateMs(shipDate) > dateMs(capturedAt.slice(0, 10)) + windowDays * 86_400_000;
+}
+
 export function chargeRefusal(status: string, alreadyHasCapture: boolean): string | null {
   if (status === 'CHARGE_PENDING') return 'A charge attempt is already in progress.';
   if (alreadyHasCapture || status === 'CHARGED' || status === 'SHIPPED') return 'This reservation has already been charged.';

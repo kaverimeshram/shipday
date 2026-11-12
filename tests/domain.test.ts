@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canCancel, chargeRefusal, ganttDependencies, ganttTasks, isChargeEligible, moveWave, planWaves } from '../src/domain.js';
+import { canCancel, chargeRefusal, ganttDependencies, ganttTasks, isChargeEligible, moveWave, outsideChargeWindow, planWaves } from '../src/domain.js';
 import { chargeWindow, localIsoDate } from '../web/src/dates.js';
 
 describe('reservation wave planning', () => {
@@ -62,6 +62,15 @@ describe('charge window', () => {
 
   it('rejects negative windows', () => {
     expect(() => isChargeEligible('2026-11-20', new Date(), -1)).toThrow('non-negative');
+  });
+});
+
+describe('charged wave slips past its window', () => {
+  it('flags a capture once the ship date moves beyond capture day plus the window', () => {
+    expect(outsideChargeWindow('2026-11-12T22:30:00.000Z', '2026-12-02', 20)).toBe(false);
+    expect(outsideChargeWindow('2026-11-12T22:30:00.000Z', '2026-12-03', 20)).toBe(true);
+    expect(outsideChargeWindow('2026-11-12T01:00:00.000Z', '2026-11-12', 0)).toBe(false);
+    expect(outsideChargeWindow('2026-11-12T01:00:00.000Z', '2026-11-13', 0)).toBe(true);
   });
 });
 

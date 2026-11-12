@@ -106,6 +106,10 @@ export function createVaultOrder(input: { vaultId: string; amount: string; curre
 export const getOrder = (id: string) => request<PayPalOrder>(`/v2/checkout/orders/${encodeURIComponent(id)}`);
 export const captureOrder = (id: string, requestId: string) => request<PayPalOrder>(`/v2/checkout/orders/${encodeURIComponent(id)}/capture`, { method: 'POST', body: '{}' }, requestId);
 
+export type PayPalRefund = { id: string; status: string; status_details?: { reason?: string } };
+export const refundCapture = (captureId: string, requestId: string) => request<PayPalRefund>(`/v2/payments/captures/${encodeURIComponent(captureId)}/refund`, { method: 'POST', body: '{}' }, requestId);
+export const getRefund = (id: string) => request<PayPalRefund>(`/v2/payments/refunds/${encodeURIComponent(id)}`);
+
 export function addTracking(input: { orderId: string; captureId: string; trackingNumber: string; carrier: string }, requestId: string) {
   return request<void>(`/v2/checkout/orders/${encodeURIComponent(input.orderId)}/track`, {
     method: 'POST',

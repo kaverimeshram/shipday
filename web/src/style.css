@@ -276,3 +276,6 @@ input[type="date"], input[type="number"] { font-family: var(--mono); font-size: 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+.refund-due { margin: 10px 0 0; padding: 10px; border: 1px solid #b8321a; background: #fbefeb; font-size: 13px; }
+.refund-due p { margin: 0 0 9px; }
+.button.refund-button { border-color: #b8321a; color: white; background: #b8321a; }
