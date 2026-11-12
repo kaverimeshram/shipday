@@ -1,0 +1,16 @@
+Example input for Shipday. Paste the dispatch confirmation from your carrier, 3PL or warehouse in its place.
+
+From: dispatch@renofulfil.example
+Subject: Outbound manifest, Tidewater pre-orders, Wave 1
+
+Hello,
+
+The following parcels left our Reno dock at 16:40 today.
+
+Order #1, ship to probe@example.com, 1 carton, UPS Ground, tracking 1Z999AA10123456784.
+Order #2, ship to second.backer@example.com, 1 carton, USPS Priority, tracking 9400111899223334445566.
+Order #7, 2 cartons, FedEx Home, tracking 771234567890.
+
+Labels were scanned at pickup. Reply to this email if any order needs a hold.
+
+Reno Fulfilment Dock Team

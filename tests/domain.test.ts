@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canCancel, chargeRefusal, ganttDependencies, ganttTasks, isChargeEligible, moveWave, outsideChargeWindow, planWaves } from '../src/domain.js';
+import { canCancel, chargeRefusal, ganttDependencies, ganttTasks, isChargeEligible, matchShipments, moveWave, outsideChargeWindow, planWaves } from '../src/domain.js';
 import { chargeWindow, localIsoDate } from '../web/src/dates.js';
 
 describe('reservation wave planning', () => {
@@ -71,6 +71,31 @@ describe('charged wave slips past its window', () => {
     expect(outsideChargeWindow('2026-11-12T22:30:00.000Z', '2026-12-03', 20)).toBe(true);
     expect(outsideChargeWindow('2026-11-12T01:00:00.000Z', '2026-11-12', 0)).toBe(false);
     expect(outsideChargeWindow('2026-11-12T01:00:00.000Z', '2026-11-13', 0)).toBe(true);
+  });
+});
+
+describe('shipment matching', () => {
+  const rows = [
+    { id: 'aaaaaaaa-0000-4000-8000-000000000001', position: 1, email: 'first@example.com' },
+    { id: 'bbbbbbbb-0000-4000-8000-000000000002', position: 2, email: 'second@example.com' },
+  ];
+  it('matches by buyer email, reservation number, or reservation id and never assigns one reservation twice', () => {
+    const result = matchShipments([
+      { reference: null, recipient_email: 'SECOND@example.com', carrier: 'UPS', tracking_number: 'T2', quote: 'q2' },
+      { reference: 'Order #1', recipient_email: null, carrier: 'USPS', tracking_number: 'T1', quote: 'q1' },
+      { reference: 'bbbbbbbb', recipient_email: null, carrier: 'UPS', tracking_number: 'T3', quote: 'q3' },
+    ], rows);
+    expect(result.matched).toEqual([
+      { reservationId: rows[1]!.id, trackingNumber: 'T2', carrier: 'UPS', quote: 'q2' },
+      { reservationId: rows[0]!.id, trackingNumber: 'T1', carrier: 'USPS', quote: 'q1' },
+    ]);
+    expect(result.unmatched.map(s => s.tracking_number)).toEqual(['T3']);
+  });
+  it('does not read #12 as reservation 1', () => {
+    expect(matchShipments([{ reference: 'Order #12', recipient_email: null, carrier: 'UPS', tracking_number: 'T', quote: 'q' }], rows).matched).toEqual([]);
+  });
+  it('leaves a shipment without a supported carrier unmatched', () => {
+    expect(matchShipments([{ reference: '#1', recipient_email: null, carrier: null, tracking_number: 'T', quote: 'q' }], rows).matched).toEqual([]);
   });
 });
 

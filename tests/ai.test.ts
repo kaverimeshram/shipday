@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseSupplyExtraction } from '../src/ai.js';
+import { parseShipmentExtraction, parseSupplyExtraction } from '../src/ai.js';
 
 const source = 'The production run of 240 units is complete on 2026-11-12.';
 const output = {
@@ -32,5 +32,18 @@ describe('supply evidence validation', () => {
 
   it('rejects unsupported dates and missing evidence', () => {
     expect(() => parseSupplyExtraction(JSON.stringify({ ...output, date: 'next week', quotes: [] }))).toThrow();
+  });
+});
+
+describe('shipment confirmation validation', () => {
+  const dispatch = 'Order #1 for buyer@example.com left Reno via UPS, tracking 1Z999AA10123456784.';
+  const shipment = { reference: '#1', recipient_email: 'buyer@example.com', carrier: 'UPS', tracking_number: '1Z999AA10123456784', quote: dispatch };
+
+  it('accepts a shipment whose tracking number sits inside a verbatim source line', () => {
+    expect(parseShipmentExtraction(JSON.stringify({ shipments: [shipment] }), dispatch).shipments[0]!.tracking_number).toBe('1Z999AA10123456784');
+  });
+
+  it('rejects a tracking number the source does not contain', () => {
+    expect(() => parseShipmentExtraction(JSON.stringify({ shipments: [{ ...shipment, tracking_number: '1Z999AA10000000000' }] }), dispatch)).toThrow('tracking number');
   });
 });

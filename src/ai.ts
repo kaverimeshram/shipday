@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { milestones } from './domain.js';
+import { carriers, milestones } from './domain.js';
 
 const nullableQuote = z.string().min(1).nullable();
 export const SupplyExtractionSchema = z.object({
@@ -65,7 +65,7 @@ export async function extractSupply(input: { text: string; file?: { name: string
     if (input.file.mime === 'application/pdf') parts.push({ type: 'file', file: { filename: input.file.name, file_data: `data:application/pdf;base64,${data}` } });
     else parts.push({ type: 'image_url', image_url: { url: `data:${input.file.mime};base64,${data}` } });
   }
-  return callValidated(key, model, parts, input.text);
+  return callValidated(key, model, parts, 'shipday_supply_update', schema, raw => parseSupplyExtraction(raw, input.text));
 }
 
 export async function explainPlan(data: unknown): Promise<string> {
@@ -89,7 +89,7 @@ export async function explainPlan(data: unknown): Promise<string> {
   } catch { throw new AIError('OpenRouter returned an invalid plan explanation.'); }
 }
 
-async function callValidated(key: string, model: string, parts: unknown[], sourceText: string): Promise<SupplyExtraction> {
+async function callValidated<T>(key: string, model: string, parts: unknown[], name: string, jsonSchema: unknown, parse: (raw: string) => T): Promise<T> {
   let correction = '';
   for (let attempt = 0; attempt < 2; attempt++) {
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -98,18 +98,18 @@ async function callValidated(key: string, model: string, parts: unknown[], sourc
       body: JSON.stringify({ model, temperature: 0, messages: [
         { role: 'system', content: 'Extract evidence from supply-chain documents. Never fill in a value that is absent.' },
         { role: 'user', content: [...parts, ...(correction ? [{ type: 'text', text: `Your last response failed validation: ${correction}. Return corrected JSON.` }] : [])] },
-      ], response_format: { type: 'json_schema', json_schema: { name: 'shipday_supply_update', strict: true, schema } } }),
+      ], response_format: { type: 'json_schema', json_schema: { name, strict: true, schema: jsonSchema } } }),
     });
     if (!response.ok) throw new AIError(`OpenRouter returned HTTP ${response.status}.`, response.status);
     const body = await response.json() as { choices?: { message?: { content?: unknown } }[] };
     try {
-      return parseSupplyExtraction(String(body.choices?.[0]?.message?.content ?? ''), sourceText);
+      return parse(String(body.choices?.[0]?.message?.content ?? ''));
     } catch (error) {
       correction = error instanceof z.ZodError ? error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ') : error instanceof Error ? error.message : String(error);
-      if (attempt) throw new AIError(`Supply extraction could not be validated: ${correction}`);
+      if (attempt) throw new AIError(`Extraction could not be validated: ${correction}`);
     }
   }
-  throw new AIError('Supply extraction could not be validated.');
+  throw new AIError('Extraction could not be validated.');
 }
 
 export function parseSupplyExtraction(raw: string, sourceText = ''): SupplyExtraction {
@@ -120,4 +120,38 @@ export function parseSupplyExtraction(raw: string, sourceText = ''): SupplyExtra
   if (sourceText && parsed.quotes.some(q => !sourceText.includes(q))) throw new Error('A quoted sentence was not found verbatim in the supplied text.');
   if (sourceText && Object.values(parsed.field_quotes).some(q => q !== null && !sourceText.includes(q))) throw new Error('A field quote was not found verbatim in the supplied text.');
   return parsed;
+}
+
+export const ShipmentExtractionSchema = z.object({ shipments: z.array(z.object({
+  reference: z.string().min(1).nullable(), recipient_email: z.string().min(3).nullable(),
+  carrier: z.enum(carriers).nullable(), tracking_number: z.string().trim().min(3).max(100), quote: z.string().min(1),
+})).min(1) });
+
+const shipmentSchema = {
+  type: 'object', additionalProperties: false, required: ['shipments'],
+  properties: { shipments: { type: 'array', minItems: 1, items: {
+    type: 'object', additionalProperties: false, required: ['reference', 'recipient_email', 'carrier', 'tracking_number', 'quote'],
+    properties: {
+      reference: { anyOf: [{ type: 'string' }, { type: 'null' }] }, recipient_email: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+      carrier: { anyOf: [{ type: 'string', enum: [...carriers] }, { type: 'null' }] }, tracking_number: { type: 'string' }, quote: { type: 'string' },
+    },
+  } } },
+} as const;
+
+export function parseShipmentExtraction(raw: string, sourceText: string) {
+  let value: unknown;
+  try { value = JSON.parse(raw); }
+  catch { throw new Error('Output is not valid JSON.'); }
+  const parsed = ShipmentExtractionSchema.parse(value);
+  for (const s of parsed.shipments) {
+    if (!sourceText.includes(s.quote)) throw new Error('A shipment quote was not found verbatim in the supplied text.');
+    if (!s.quote.includes(s.tracking_number)) throw new Error(`The tracking number ${s.tracking_number} is not in its quoted line.`);
+  }
+  return parsed;
+}
+
+export async function extractShipments(text: string) {
+  const key = process.env.OPENROUTER_API_KEY;
+  if (!key) throw new AIError('Shipment reading is not configured. Set OPENROUTER_API_KEY.');
+  return callValidated(key, process.env.AI_MODEL || 'google/gemini-2.5-flash', [{ type: 'text', text: `List every outbound parcel in this carrier, 3PL, or warehouse dispatch confirmation. For each parcel return the order reference exactly as written (null if absent), the recipient email (null if absent), the carrier as one of ${carriers.join(', ')} (null if it is none of these or not stated), the tracking number exactly as written, and the exact complete source line that contains that tracking number as quote. Never invent a value.\n\nSource text:\n${text}` }], 'shipday_shipments', shipmentSchema, raw => parseShipmentExtraction(raw, text));
 }

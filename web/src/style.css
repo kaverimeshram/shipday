@@ -279,3 +279,7 @@ input[type="date"], input[type="number"] { font-family: var(--mono); font-size: 
 .refund-due { margin: 10px 0 0; padding: 10px; border: 1px solid #b8321a; background: #fbefeb; font-size: 13px; }
 .refund-due p { margin: 0 0 9px; }
 .button.refund-button { border-color: #b8321a; color: white; background: #b8321a; }
+.dispatch-read { display: grid; gap: 8px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--rule); }
+.dispatch-read h4 { margin: 0; font-size: 11px; letter-spacing: .09em; }
+.dispatch-read textarea { min-height: 96px; font-family: var(--mono); font-size: 13px; }
+.tracking-quote { grid-column: 2 / -1; color: var(--secondary); }

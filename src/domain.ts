@@ -61,6 +61,26 @@ export function outsideChargeWindow(capturedAt: string, shipDate: string, window
   return dateMs(shipDate) > dateMs(capturedAt.slice(0, 10)) + windowDays * 86_400_000;
 }
 
+export const carriers = ['USPS', 'UPS', 'FEDEX', 'DHL', 'ONTRAC'] as const;
+export type Shipment = { reference: string | null; recipient_email: string | null; carrier: string | null; tracking_number: string; quote: string };
+
+export function matchShipments(shipments: Shipment[], rows: { id: string; position: number; email: string }[]) {
+  const used = new Set<string>();
+  const matched: { reservationId: string; trackingNumber: string; carrier: string; quote: string }[] = [];
+  const unmatched: Shipment[] = [];
+  for (const shipment of shipments) {
+    const ref = shipment.reference?.toLowerCase() || '';
+    const email = shipment.recipient_email?.toLowerCase();
+    const row = (carriers as readonly string[]).includes(shipment.carrier || '') ? rows.find(r => !used.has(r.id) && (
+      (email && r.email.toLowerCase() === email) ||
+      (ref && (ref.includes(r.id.slice(0, 8).toLowerCase()) || new RegExp(`#${r.position}(?!\\d)`).test(ref))))) : undefined;
+    if (!row) { unmatched.push(shipment); continue; }
+    used.add(row.id);
+    matched.push({ reservationId: row.id, trackingNumber: shipment.tracking_number, carrier: shipment.carrier!, quote: shipment.quote });
+  }
+  return { matched, unmatched };
+}
+
 export function chargeRefusal(status: string, alreadyHasCapture: boolean): string | null {
   if (status === 'CHARGE_PENDING') return 'A charge attempt is already in progress.';
   if (alreadyHasCapture || status === 'CHARGED' || status === 'SHIPPED') return 'This reservation has already been charged.';

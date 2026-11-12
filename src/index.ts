@@ -8,8 +8,8 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { z } from 'zod';
 import { campaignAllocations, db, hasLiveCapture } from './db.js';
-import { AIError, extractSupply, explainPlan, type SupplyExtraction } from './ai.js';
-import { chargeRefusal, ganttDependencies, ganttTasks, isChargeEligible, milestones, moveWave, outsideChargeWindow, planWaves, type Milestone } from './domain.js';
+import { AIError, extractShipments, extractSupply, explainPlan, type SupplyExtraction } from './ai.js';
+import { chargeRefusal, ganttDependencies, ganttTasks, isChargeEligible, matchShipments, milestones, moveWave, outsideChargeWindow, planWaves, type Milestone } from './domain.js';
 import { PayPalError, addTracking, captureOrder, createPaymentToken, createSetupToken, createVaultOrder, deletePaymentToken, getOrder, getPaymentToken, getPaymentTokenForCancelCheck, getRefund, newRequestId, refundCapture, verifyWebhookSignature, type PayPalOrder } from './paypal.js';
 import { paypalPolicy } from './policy.js';
 
@@ -312,6 +312,19 @@ app.post('/api/campaigns/:slug/waves/:waveId/refund', async c => {
   refreshWaveData(campaign);
   emit('refund', campaign.slug);
   return c.json({ results });
+});
+
+app.post('/api/campaigns/:slug/waves/:waveId/tracking/read', async c => {
+  const campaign = requireCampaign(c, c.req.param('slug'), true);
+  if (!asCampaign(campaign)) return campaign;
+  const parsed = z.object({ text: z.string().trim().min(10).max(100_000) }).safeParse(await c.req.json());
+  if (!parsed.success) return c.json({ error: 'Paste the carrier or warehouse dispatch confirmation.' }, 400);
+  const rows = db.prepare("SELECT id, position, email FROM reservations WHERE campaign_id = ? AND wave_id = ? AND status = 'CHARGED' AND tracking_number IS NULL ORDER BY position").all(campaign.id, c.req.param('waveId')) as { id: string; position: number; email: string }[];
+  if (!rows.length) return c.json({ error: 'No charged reservation in this wave is waiting for tracking.' }, 409);
+  try {
+    const { shipments } = await extractShipments(parsed.data.text);
+    return c.json(matchShipments(shipments, rows));
+  } catch (error) { return errorResponse(c, error); }
 });
 
 app.post('/api/campaigns/:slug/waves/:waveId/tracking', async c => {
