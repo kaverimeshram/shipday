@@ -6,7 +6,7 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypt
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { z } from 'zod';
-import { db } from './db.js';
+import { campaignAllocations, db } from './db.js';
 import { AIError, extractSupply, explainPlan, type SupplyExtraction } from './ai.js';
 import { chargeRefusal, ganttDependencies, ganttTasks, isChargeEligible, milestones, moveWave, planWaves, type Milestone } from './domain.js';
 import { PayPalError, addTracking, captureOrder, createPaymentToken, createSetupToken, createVaultOrder, deletePaymentToken, getOrder, getPaymentToken, getPaymentTokenForCancelCheck, newRequestId, verifyWebhookSignature, type PayPalOrder } from './paypal.js';
@@ -213,7 +213,7 @@ app.get('/api/campaigns/:slug/desk', c => {
   const campaign = requireCampaign(c, c.req.param('slug'), true);
   if (!asCampaign(campaign)) return campaign;
   const waves = db.prepare('SELECT * FROM waves WHERE campaign_id = ? ORDER BY ship_date, number').all(campaign.id) as any[];
-  const allocations = db.prepare('SELECT reservation_id, wave_id, qty FROM reservation_allocations').all() as any[];
+  const allocations = campaignAllocations(campaign.id);
   const reservations = db.prepare('SELECT * FROM reservations WHERE campaign_id = ? ORDER BY position').all(campaign.id) as any[];
   const updates = db.prepare('SELECT * FROM supply_updates WHERE campaign_id = ? ORDER BY event_date, confirmed_at').all(campaign.id) as any[];
   const { reserved } = campaignAvailability(campaign.id);
@@ -379,7 +379,7 @@ function persistPlan(campaign: CampaignRow, plan: ReturnType<typeof planWaves>, 
     db.exec('COMMIT');
   } catch (error) { db.exec('ROLLBACK'); throw error; }
   const waves = db.prepare('SELECT * FROM waves WHERE campaign_id = ? ORDER BY number').all(campaign.id) as any[];
-  const allocations = db.prepare('SELECT reservation_id AS reservationId, wave_id AS waveId, qty FROM reservation_allocations ORDER BY wave_id, reservation_id').all() as any[];
+  const allocations = campaignAllocations(campaign.id);
   return { waves: waves.map(w => ({ id: w.id, number: w.number, units: w.units, shipDate: w.ship_date })), allocations };
 }
 

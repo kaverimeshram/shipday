@@ -54,3 +54,8 @@ CREATE TABLE IF NOT EXISTS charge_attempts (
   UNIQUE(reservation_id, paypal_request_id)
 );
 `);
+
+export function campaignAllocations(campaignId: string) {
+  return db.prepare(`SELECT a.reservation_id AS reservationId, a.wave_id AS waveId, a.qty FROM reservation_allocations a
+    JOIN waves w ON w.id = a.wave_id WHERE w.campaign_id = ? ORDER BY a.wave_id, a.reservation_id`).all(campaignId) as { reservationId: string; waveId: string; qty: number }[];
+}
