@@ -116,6 +116,15 @@ export function ganttDependencies(waves: Wave[]) {
     .map(([from, to]) => ({ fromTask: `${wave.id}-${from}`, toTask: `${wave.id}-${to}` })));
 }
 
+export type SupplyFingerprint = { units: number; milestone: string; date: string; origin: string | null; destination: string | null; vesselOrCarrier: string | null };
+
+// The same milestone confirmed twice (a double click, or the same email read again) must not add a second wave.
+export function sameSupply(a: SupplyFingerprint, b: SupplyFingerprint): boolean {
+  const norm = (value: string | null) => (value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  return a.units === b.units && a.milestone === b.milestone && a.date === b.date
+    && norm(a.origin) === norm(b.origin) && norm(a.destination) === norm(b.destination) && norm(a.vesselOrCarrier) === norm(b.vesselOrCarrier);
+}
+
 export function canCancel(status: string): boolean {
   return ['PENDING', 'RESERVED'].includes(status);
 }

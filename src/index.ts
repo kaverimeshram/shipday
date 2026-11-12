@@ -10,7 +10,7 @@ import { resolve } from 'node:path';
 import { z } from 'zod';
 import { campaignAllocations, db, hasLiveCapture } from './db.js';
 import { AIError, extractShipments, extractSupply, explainPlan, type SupplyExtraction } from './ai.js';
-import { chargeRefusal, ganttDependencies, ganttTasks, isChargeEligible, matchShipments, milestones, moveWave, outsideChargeWindow, planWaves, type Milestone } from './domain.js';
+import { chargeRefusal, sameSupply, ganttDependencies, ganttTasks, isChargeEligible, matchShipments, milestones, moveWave, outsideChargeWindow, planWaves, type Milestone } from './domain.js';
 import { PayPalError, addTracking, orderHasTracker, captureOrder, createCardSetupToken, createPaymentToken, createSetupToken, createVaultOrder, deletePaymentToken, getOrder, getPaymentToken, getPaymentTokenForCancelCheck, getRefund, newRequestId, refundCapture, verifyWebhookSignature, type PayPalOrder } from './paypal.js';
 import { paypalPolicy } from './policy.js';
 import { imageType, storeCampaignImage } from './image.js';
@@ -217,6 +217,8 @@ async function saveVault(reservation: any, setupId: string): Promise<'RESERVED' 
     emit('reservation', campaign.slug);
     return 'CANCELLED';
   }
+  // Allocate the new reservation to a wave right away, so the merchant desk shows it without a reload.
+  try { const row = campaignBySlug(campaign.slug); if (row) rebuildPlan(row); } catch { /* the next supply confirm or date move replans */ }
   emit('reservation', campaign.slug);
   return 'RESERVED';
 }
@@ -347,6 +349,12 @@ app.post('/api/campaigns/:slug/supply/confirm', async c => {
   if (!parsed.success) return c.json({ error: parsed.error.issues[0]?.message || 'Confirmed supply fields are invalid.' }, 400);
   const input = parsed.data;
   if (input.source && input.quotes.some(q => !input.source.includes(q))) return c.json({ error: 'Every quote must appear exactly in the pasted source.' }, 400);
+  const confirmed = db.prepare('SELECT id, units, milestone, event_date, origin, destination, vessel_or_carrier FROM supply_updates WHERE campaign_id = ?').all(campaign.id) as { id: string; units: number; milestone: string; event_date: string; origin: string | null; destination: string | null; vessel_or_carrier: string | null }[];
+  const duplicate = confirmed.find(u => sameSupply({ units: u.units, milestone: u.milestone, date: u.event_date, origin: u.origin, destination: u.destination, vesselOrCarrier: u.vessel_or_carrier }, input));
+  if (duplicate) {
+    const waves = db.prepare('SELECT * FROM waves WHERE campaign_id = ? ORDER BY number').all(campaign.id) as any[];
+    return c.json({ updateId: duplicate.id, duplicate: true, waves: waves.map(w => ({ id: w.id, number: w.number, units: w.units, shipDate: w.ship_date })), allocations: campaignAllocations(campaign.id), explanation: null }, 200);
+  }
   const id = randomUUID();
   db.prepare(`INSERT INTO supply_updates (id, campaign_id, source, units, milestone, event_date, origin, destination, vessel_or_carrier, quotes, confidence, confirmed_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)

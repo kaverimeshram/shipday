@@ -163,3 +163,18 @@ describe('merchant charge window state', () => {
     expect(chargeWindow('2026-12-03', 30, now).eligible).toBe(true);
   });
 });
+
+describe('supply confirm idempotency', () => {
+  const update = { units: 480, milestone: 'departed', date: '2026-11-12', origin: 'Yantian', destination: 'Long Beach', vesselOrCarrier: 'MSC ARIANE' };
+  it('treats the same milestone confirmed twice as one update', async () => {
+    const { sameSupply } = await import('../src/domain.js');
+    expect(sameSupply(update, { ...update })).toBe(true);
+    expect(sameSupply(update, { ...update, origin: ' yantian ', vesselOrCarrier: 'msc  ariane' })).toBe(true);
+  });
+  it('keeps genuinely different milestones apart', async () => {
+    const { sameSupply } = await import('../src/domain.js');
+    expect(sameSupply(update, { ...update, date: '2026-11-19' })).toBe(false);
+    expect(sameSupply(update, { ...update, units: 240 })).toBe(false);
+    expect(sameSupply(update, { ...update, milestone: 'arrived_port' })).toBe(false);
+  });
+});
