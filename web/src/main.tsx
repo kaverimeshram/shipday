@@ -2,6 +2,7 @@ import React, { lazy, Suspense, useCallback, useEffect, useMemo, useState } from
 import { createRoot } from 'react-dom/client';
 import '@bryntum/gantt/stockholm-light.css';
 import './style.css';
+import { localIsoDate } from './dates';
 
 const BryntumGantt = lazy(async () => ({ default: (await import('@bryntum/gantt-react')).BryntumGantt }));
 
@@ -153,7 +154,7 @@ function Merchant({ slug, config }: { slug: string; config: Config | null }) {
     const task = taskRecords.find(record => desk?.waves.some(w => `${w.id}-ship` === record.id));
     if (!task?.startDate || !desk) return;
     const waveId = task.id.slice(0, -5); setBusy(`date:${waveId}`); setError('');
-    try { await api(`/api/campaigns/${encodeURIComponent(slug)}/waves/${waveId}/date`, json('POST', { shipDate: task.startDate.toISOString().slice(0, 10) })); setNotice('Ship date moved. Charge eligibility has been recalculated.'); await load(); }
+    try { await api(`/api/campaigns/${encodeURIComponent(slug)}/waves/${waveId}/date`, json('POST', { shipDate: localIsoDate(task.startDate) })); setNotice('Ship date moved. Charge eligibility has been recalculated.'); await load(); }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'Ship date could not be moved.'); await load(); }
     finally { setBusy(''); }
   }

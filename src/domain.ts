@@ -69,21 +69,19 @@ export function ganttTasks(waves: Wave[], chargeWindowDays: number) {
     const ids = ['production', 'freight', 'warehouse', 'charge', 'ship'].map(x => `${wave.id}-${x}`);
     return [
       { id: wave.id, name: `Wave ${wave.number} · ${wave.units} units`, expanded: true, children: [
-        { id: ids[0], name: 'Production', startDate: phase(35), endDate: phase(27), eventColor: 'blue' },
-        { id: ids[1], name: 'Freight', startDate: phase(27), endDate: phase(7), eventColor: 'blue' },
-        { id: ids[2], name: 'Warehouse', startDate: phase(7), endDate: phase(2), eventColor: 'blue' },
-        { id: ids[3], name: 'Charge window', startDate: phase(chargeWindowDays), endDate: wave.shipDate, eventColor: 'orange' },
-        { id: ids[4], name: 'Ship', startDate: wave.shipDate, endDate: addDays(wave.shipDate, 1), eventColor: 'green' },
+        { id: ids[0], name: 'Production', startDate: phase(35), endDate: phase(27), eventColor: 'blue', manuallyScheduled: true },
+        { id: ids[1], name: 'Freight', startDate: phase(27), endDate: phase(7), eventColor: 'blue', manuallyScheduled: true },
+        { id: ids[2], name: 'Warehouse', startDate: phase(7), endDate: phase(2), eventColor: 'blue', manuallyScheduled: true },
+        { id: ids[3], name: 'Charge window', startDate: phase(chargeWindowDays), endDate: wave.shipDate, eventColor: 'orange', manuallyScheduled: true },
+        { id: ids[4], name: 'Ship', startDate: wave.shipDate, endDate: addDays(wave.shipDate, 1), eventColor: 'green', manuallyScheduled: true },
       ] },
     ];
   });
 }
 
 export function ganttDependencies(waves: Wave[]) {
-  return waves.flatMap(wave => {
-    const ids = ['production', 'freight', 'warehouse', 'charge', 'ship'].map(x => `${wave.id}-${x}`);
-    return ids.slice(0, -1).map((fromTask, i) => ({ fromTask, toTask: ids[i + 1] }));
-  });
+  return waves.flatMap(wave => [['production', 'freight'], ['freight', 'warehouse'], ['warehouse', 'ship'], ['charge', 'ship']]
+    .map(([from, to]) => ({ fromTask: `${wave.id}-${from}`, toTask: `${wave.id}-${to}` })));
 }
 
 export function canCancel(status: string): boolean {
