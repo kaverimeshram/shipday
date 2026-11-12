@@ -516,3 +516,35 @@ input[type="file"] { padding: 7px 9px; font-size: 14px; }
 @media (max-width: 700px) {
   .gantt-frame .b-tree-cell-value .gantt-chip { font-size: 9px; padding: 1px 4px; }
 }
+
+/* Auto-protect: automatic refunds when a wave slips past its charge window. */
+:root { --refunded: #2f6b45; --refunded-wash: #eef6f0; --protect: #3f5f70; --protect-wash: #eef3f5; }
+.chip-refunded { color: white; border-color: var(--refunded); background: var(--refunded); }
+.chip-protect { color: white; border-color: var(--protect); background: var(--protect); }
+.wave-card-protect { border-color: var(--protect); }
+.gantt-frame .b-grid-row.wave-protect { background: var(--protect-wash); }
+.refund-due.refund-protect { border: 2px solid var(--protect); background: var(--protect-wash); }
+.refund-due.refund-protect strong { color: #24404f; }
+.refund-due .refund-failed { display: block; margin-bottom: 4px; }
+.alert-protect { border-color: var(--protect); background: var(--protect-wash); color: #24404f; }
+.alert-protect .alert-tag { background: var(--protect); }
+.autorefunded-note { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0 0; padding: 10px; border: 1px solid var(--refunded); background: var(--refunded-wash); color: #1f4a2f; font-size: 13px; }
+.proof.proof-refunded { color: var(--refunded); font-weight: 600; }
+.autoprotect-toggle { display: inline-flex; align-items: flex-start; gap: 8px; max-width: 330px; margin-left: auto; margin-right: 16px; font-size: 13px; color: var(--secondary); cursor: pointer; }
+.autoprotect-toggle input { margin-top: 3px; accent-color: var(--refunded); }
+.autoprotect-toggle strong { display: block; color: var(--ink); }
+.ledger-section { margin-top: 40px; }
+.ledger-list { max-width: 960px; margin: 0; padding: 0; list-style: none; }
+.ledger-list li { display: grid; grid-template-columns: 125px minmax(0, 1fr); gap: 20px; padding: 14px 8px; border-bottom: 1px solid var(--rule); border-left: 4px solid var(--refunded); }
+.ledger-list li.ledger-failed { border-left-color: var(--late); background: var(--late-wash); }
+.ledger-list time { color: var(--secondary); font-size: 12px; }
+.ledger-list p { margin: 4px 0 0; color: var(--secondary); font-size: 14px; }
+.ledger-list .ledger-head { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--ink); }
+.ledger-actor { font-size: 12px; color: var(--muted); }
+.autorefund-banner { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px; align-items: start; margin: 0 0 20px; padding: 14px 16px; border: 1px solid var(--refunded); border-left-width: 6px; background: var(--refunded-wash); color: #1f4a2f; }
+.autorefund-banner p { margin: 0; font-size: 16px; }
+@media (max-width: 640px) {
+  .autoprotect-toggle { margin: 10px 0 0; max-width: none; }
+  .ledger-list li { grid-template-columns: 1fr; gap: 4px; }
+  .autorefund-banner { grid-template-columns: 1fr; }
+}
