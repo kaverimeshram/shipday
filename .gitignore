@@ -1,0 +1,12 @@
+node_modules/
+dist/
+web/dist/
+data/
+.env
+.env.*
+!.env.example
+.progress/
+BUILD-REPORT.md
+.codex-last.md
+*.log
+.DS_Store
