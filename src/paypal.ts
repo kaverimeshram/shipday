@@ -13,7 +13,7 @@ export class PayPalError extends Error {
 export type PayPalOrder = {
   id: string;
   status: string;
-  purchase_units?: { payments?: { captures?: { id: string; status: string; status_details?: { reason?: string } }[] }; shipping?: { trackers?: { tracking_number?: string }[] } }[];
+  purchase_units?: { payments?: { captures?: { id: string; status: string; status_details?: { reason?: string } }[] }; shipping?: { trackers?: { id?: string; status?: string; tracking_number?: string }[] } }[];
   links?: { rel: string; href: string }[];
 };
 
@@ -125,6 +125,11 @@ export const captureOrder = (id: string, requestId: string) => request<PayPalOrd
 export type PayPalRefund = { id: string; status: string; status_details?: { reason?: string } };
 export const refundCapture = (captureId: string, requestId: string) => request<PayPalRefund>(`/v2/payments/captures/${encodeURIComponent(captureId)}/refund`, { method: 'POST', body: '{}' }, requestId);
 export const getRefund = (id: string) => request<PayPalRefund>(`/v2/payments/refunds/${encodeURIComponent(id)}`);
+
+// PayPal's order readback names a tracker `${captureId}-${trackingNumber}` and may omit tracking_number.
+export function orderHasTracker(order: PayPalOrder, captureId: string, trackingNumber: string): boolean {
+  return Boolean(order.purchase_units?.some(unit => unit.shipping?.trackers?.some(t => t.tracking_number === trackingNumber || t.id === `${captureId}-${trackingNumber}`)));
+}
 
 export function addTracking(input: { orderId: string; captureId: string; trackingNumber: string; carrier: string }, requestId: string) {
   return request<void>(`/v2/checkout/orders/${encodeURIComponent(input.orderId)}/track`, {

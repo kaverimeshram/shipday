@@ -10,7 +10,7 @@ import { z } from 'zod';
 import { campaignAllocations, db, hasLiveCapture } from './db.js';
 import { AIError, extractShipments, extractSupply, explainPlan, type SupplyExtraction } from './ai.js';
 import { chargeRefusal, ganttDependencies, ganttTasks, isChargeEligible, matchShipments, milestones, moveWave, outsideChargeWindow, planWaves, type Milestone } from './domain.js';
-import { PayPalError, addTracking, captureOrder, createCardSetupToken, createPaymentToken, createSetupToken, createVaultOrder, deletePaymentToken, getOrder, getPaymentToken, getPaymentTokenForCancelCheck, getRefund, newRequestId, refundCapture, verifyWebhookSignature, type PayPalOrder } from './paypal.js';
+import { PayPalError, addTracking, orderHasTracker, captureOrder, createCardSetupToken, createPaymentToken, createSetupToken, createVaultOrder, deletePaymentToken, getOrder, getPaymentToken, getPaymentTokenForCancelCheck, getRefund, newRequestId, refundCapture, verifyWebhookSignature, type PayPalOrder } from './paypal.js';
 import { paypalPolicy } from './policy.js';
 
 const app = new Hono();
@@ -382,9 +382,8 @@ app.post('/api/campaigns/:slug/waves/:waveId/tracking', async c => {
       const requestId = row.tracking_request_id || newRequestId();
       db.prepare('UPDATE reservations SET tracking_request_id = ?, tracking_number = ?, carrier = ? WHERE id = ? AND tracking_request_id IS NULL').run(requestId, item.trackingNumber, item.carrier, row.id);
       await addTracking({ orderId: row.paypal_order_id, captureId: row.capture_id, trackingNumber: item.trackingNumber, carrier: item.carrier }, requestId);
-      const order = await getOrder(row.paypal_order_id) as PayPalOrder & { purchase_units?: { shipping?: { trackers?: { tracking_number?: string }[] } }[] };
-      const found = order.purchase_units?.some(unit => unit.shipping?.trackers?.some(tracker => tracker.tracking_number === item.trackingNumber));
-      if (!found) throw new Error('PayPal order readback did not contain the tracking number.');
+      const order = await getOrder(row.paypal_order_id);
+      if (!orderHasTracker(order, row.capture_id, item.trackingNumber)) throw new Error('PayPal order readback did not contain the tracking number.');
       db.prepare("UPDATE reservations SET status = 'SHIPPED' WHERE id = ?").run(row.id);
       results.push({ id: row.id, status: 'SHIPPED', trackingNumber: item.trackingNumber });
     } catch (error) { results.push({ id: row.id, error: error instanceof Error ? error.message : 'Tracking update failed.' }); }
