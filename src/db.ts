@@ -110,3 +110,14 @@ CREATE TABLE IF NOT EXISTS ledger_entries (
 );
 CREATE INDEX IF NOT EXISTS ledger_campaign ON ledger_entries(campaign_id, created_at);
 `);
+// Auto-protect grace period: a drag that makes charges slip holds their refunds for an undo window.
+db.exec(`
+CREATE TABLE IF NOT EXISTS replan_holds (
+  id TEXT PRIMARY KEY, campaign_id TEXT NOT NULL REFERENCES campaigns(id), wave_id TEXT NOT NULL,
+  previous_ship_date TEXT NOT NULL, previous_override TEXT, new_ship_date TEXT NOT NULL,
+  refund_count INTEGER NOT NULL, refund_cents INTEGER NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('HOLDING','UNDONE','SUPERSEDED')),
+  hold_until TEXT NOT NULL, created_at TEXT NOT NULL, resolved_at TEXT
+);
+CREATE INDEX IF NOT EXISTS replan_holds_wave ON replan_holds(wave_id, status);
+`);

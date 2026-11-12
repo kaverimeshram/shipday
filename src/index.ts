@@ -14,7 +14,7 @@ import { chargeRefusal, sameSupply, ganttDependencies, ganttTasks, isChargeEligi
 import { PayPalError, addTracking, orderHasTracker, captureOrder, createCardSetupToken, createPaymentToken, createSetupToken, createVaultOrder, deletePaymentToken, getOrder, getPaymentToken, getPaymentTokenForCancelCheck, getRefund, newRequestId, refundCapture, verifyWebhookSignature, type PayPalOrder } from './paypal.js';
 import { paypalPolicy } from './policy.js';
 import { imageType, storeCampaignImage } from './image.js';
-import { autoProtectCampaign, campaignLedger, refundInputFor, resumePendingRefunds, settleRefund, slippedCharges, sweepAutoProtect, type RefundClient } from './autoprotect.js';
+import { GRACE_MS, activeHolds, holdDragRefunds, undoDragHold, autoProtectCampaign, campaignLedger, refundInputFor, resumePendingRefunds, settleRefund, slippedCharges, sweepAutoProtect, type RefundClient } from './autoprotect.js';
 
 const app = new Hono();
 app.use('/api/*', cors({ origin: publicUrl(), allowMethods: ['GET', 'POST', 'OPTIONS'], allowHeaders: ['Content-Type'], credentials: true }));
@@ -340,7 +340,7 @@ app.get('/api/campaigns/:slug/desk', c => {
     WHERE r.campaign_id = ? ORDER BY r.position`).all(campaign.id) as any[];
   const updates = db.prepare('SELECT * FROM supply_updates WHERE campaign_id = ? ORDER BY event_date, confirmed_at').all(campaign.id) as any[];
   const { reserved } = campaignAvailability(campaign.id);
-  return c.json({ campaign: { id: campaign.id, slug: campaign.slug, name: campaign.name, imageUrl: campaign.image_url, priceCents: campaign.price_cents, currency: campaign.currency, quantity: campaign.quantity, shipDate: campaign.ship_date, chargeWindowDays: campaign.charge_window_days, autoProtect: campaign.auto_protect !== 0 }, ledger: campaignLedger(campaign.id), reserved, available: Math.max(0, campaign.quantity - reserved), waves: waves.map(w => ({ id: w.id, number: w.number, units: w.units, shipDate: w.ship_date, dateOverride: w.date_override })), allocations, reservations: reservations.map(r => ({ id: r.id, email: r.email, qty: r.qty, position: r.position, status: r.status, waveId: r.wave_id, captureId: r.capture_id, orderId: r.paypal_order_id, issue: r.paypal_issue, trackingNumber: r.tracking_number, carrier: r.carrier, capturedAt: r.captured_at, refundId: r.refund_id, refundAutomatic: r.refund_source === 'auto', refundedAt: r.refunded_at,
+  return c.json({ campaign: { id: campaign.id, slug: campaign.slug, name: campaign.name, imageUrl: campaign.image_url, priceCents: campaign.price_cents, currency: campaign.currency, quantity: campaign.quantity, shipDate: campaign.ship_date, chargeWindowDays: campaign.charge_window_days, autoProtect: campaign.auto_protect !== 0 }, ledger: campaignLedger(campaign.id), holds: activeHolds(campaign.id, new Date()), graceSeconds: GRACE_MS / 1000, serverNow: nowIso(), reserved, available: Math.max(0, campaign.quantity - reserved), waves: waves.map(w => ({ id: w.id, number: w.number, units: w.units, shipDate: w.ship_date, dateOverride: w.date_override })), allocations, reservations: reservations.map(r => ({ id: r.id, email: r.email, qty: r.qty, position: r.position, status: r.status, waveId: r.wave_id, captureId: r.capture_id, orderId: r.paypal_order_id, issue: r.paypal_issue, trackingNumber: r.tracking_number, carrier: r.carrier, capturedAt: r.captured_at, refundId: r.refund_id, refundAutomatic: r.refund_source === 'auto', refundedAt: r.refunded_at,
     refundState: r.status === 'CHARGED' ? r.live_refund_status ?? null : null, refundIssue: r.status === 'CHARGED' ? r.live_refund_issue ?? null : null, refundAttempts: r.live_refund_attempts ?? null, refundNextAttemptAt: r.live_refund_next ?? null,
     outsideWindow: r.status === 'CHARGED' && Boolean(r.captured_at && r.wave_ship_date) && outsideChargeWindow(r.captured_at, r.wave_ship_date, campaign.charge_window_days) })), updates: updates.map(u => ({ id: u.id, units: u.units, milestone: u.milestone, date: u.event_date, origin: u.origin, destination: u.destination, vesselOrCarrier: u.vessel_or_carrier, quotes: JSON.parse(u.quotes), confidence: u.confidence, confirmedAt: u.confirmed_at })), tasks: ganttTasks(waves.map(w => ({ id: w.id, number: w.number, units: w.units, shipDate: w.ship_date })), campaign.charge_window_days), dependencies: ganttDependencies(waves.map(w => ({ id: w.id, number: w.number, units: w.units, shipDate: w.ship_date }))) });
 });
@@ -396,15 +396,28 @@ app.post('/api/campaigns/:slug/waves/:waveId/date', async c => {
   if (!asCampaign(campaign)) return campaign;
   const parsed = MoveInput.safeParse(await c.req.json());
   if (!parsed.success) return c.json({ error: 'Ship date must use YYYY-MM-DD.' }, 400);
-  const existing = db.prepare('SELECT id, number, units, ship_date FROM waves WHERE id = ? AND campaign_id = ?').get(c.req.param('waveId'), campaign.id) as any;
+  const existing = db.prepare('SELECT id, number, units, ship_date, date_override FROM waves WHERE id = ? AND campaign_id = ?').get(c.req.param('waveId'), campaign.id) as any;
   if (!existing) return c.json({ error: 'Wave not found.' }, 404);
   moveWave([{ id: existing.id, number: existing.number, units: existing.units, shipDate: existing.ship_date }], existing.id, parsed.data.shipDate);
   const before = waveDates(campaign.id);
   db.prepare('UPDATE waves SET ship_date = ?, date_override = ? WHERE id = ?').run(parsed.data.shipDate, parsed.data.shipDate, existing.id);
   const plan = refreshWaveData(campaign);
+  // A drag never moves money straight away: slipped charges are held for a 60 s undo window first.
+  const hold = holdDragRefunds(campaign.id, existing.id, { shipDate: existing.ship_date, override: existing.date_override });
+  if (hold) setTimeout(() => { const row = campaignBySlug(campaign.slug); if (row) triggerAutoProtect(row, before); }, Date.parse(hold.holdUntil) - Date.now() + 1_000).unref();
   triggerAutoProtect(campaign, before);
   emit('schedule', campaign.slug);
-  return c.json(plan);
+  return c.json({ ...plan, hold });
+});
+
+app.post('/api/campaigns/:slug/holds/:holdId/undo', c => {
+  const campaign = requireCampaign(c, c.req.param('slug'), true);
+  if (!asCampaign(campaign)) return campaign;
+  const result = undoDragHold(campaign.id, c.req.param('holdId'));
+  if (!result.ok) return c.json({ error: result.error }, 409);
+  const plan = refreshWaveData(campaign);
+  emit('schedule', campaign.slug);
+  return c.json({ ...plan, undone: result.hold });
 });
 
 app.post('/api/campaigns/:slug/waves/:waveId/charge', async c => {

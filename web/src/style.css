@@ -551,3 +551,10 @@ input[type="file"] { padding: 7px 9px; font-size: 14px; }
   .ledger-list li { grid-template-columns: 1fr; gap: 4px; }
   .autorefund-banner { grid-template-columns: 1fr; }
 }
+
+/* Auto-protect grace period: confirm a refunding drag, then a 60 s undo window. */
+.grace-confirm { border-left-color: var(--late); background: var(--late-wash); }
+.grace-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; }
+.grace-toast { border-left-color: var(--protect); background: var(--protect-wash); }
+.grace-toast strong { font-size: 18px; }
+@media (max-width: 640px) { .grace-confirm, .grace-toast { flex-direction: column; } }

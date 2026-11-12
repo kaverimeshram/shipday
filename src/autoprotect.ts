@@ -180,6 +180,8 @@ export function autoProtectCampaign(client: RefundClient, campaignId: string, op
     const results: RefundResult[] = [];
     for (const row of rows) {
       if (row.refund_status === 'COMPLETED') continue;
+      // Grace period: a drag's refunds wait out their undo window before anything reaches PayPal.
+      if (!row.refund_status && activeHold(row.wave_id, now())) continue;
       const enabled = campaign.auto_protect === 1;
       // A refund already in flight is always finished; new refunds and retries follow the toggle.
       if (row.refund_status !== 'PENDING' && !enabled) continue;
@@ -237,4 +239,55 @@ export async function resumePendingRefunds(client: RefundClient, options: Settle
     catch (error) { console.error('Shipday refund reconciliation failed', { name: error instanceof Error ? error.name : 'Error' }); }
   }
   return out;
+}
+
+export const GRACE_MS = 60_000;
+export type ReplanHold = { id: string; campaignId: string; waveId: string; previousShipDate: string; newShipDate: string; refundCount: number; refundCents: number; holdUntil: string; status: string };
+const holdOut = (h: any): ReplanHold => ({ id: h.id, campaignId: h.campaign_id, waveId: h.wave_id, previousShipDate: h.previous_ship_date, newShipDate: h.new_ship_date, refundCount: h.refund_count, refundCents: h.refund_cents, holdUntil: h.hold_until, status: h.status });
+
+export function activeHold(waveId: string, now: Date): ReplanHold | null {
+  const h = db.prepare("SELECT * FROM replan_holds WHERE wave_id = ? AND status = 'HOLDING' AND hold_until > ? ORDER BY created_at DESC LIMIT 1").get(waveId, now.toISOString());
+  return h ? holdOut(h) : null;
+}
+
+export function activeHolds(campaignId: string, now: Date): ReplanHold[] {
+  return (db.prepare("SELECT * FROM replan_holds WHERE campaign_id = ? AND status = 'HOLDING' AND hold_until > ? ORDER BY created_at").all(campaignId, now.toISOString()) as any[]).map(holdOut);
+}
+
+// Called after a drag has moved a wave. If charged reservations on it now slip and have no refund yet,
+// their refunds are held for GRACE_MS so the merchant can undo the drag before any money moves.
+export function holdDragRefunds(campaignId: string, waveId: string, previous: { shipDate: string; override: string | null }, now: Date = new Date(), graceMs = GRACE_MS): ReplanHold | null {
+  const { campaign, rows } = slippedCharges(campaignId);
+  const fresh = rows.filter(r => r.wave_id === waveId && !r.refund_status);
+  if (!campaign || !campaign.auto_protect || !fresh.length) return null;
+  const wave = db.prepare('SELECT ship_date FROM waves WHERE id = ?').get(waveId) as { ship_date: string };
+  const id = randomUUID();
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    // A second drag inside the window replaces the first hold; undo then steps back one drag.
+    db.prepare("UPDATE replan_holds SET status = 'SUPERSEDED', resolved_at = ? WHERE wave_id = ? AND status = 'HOLDING'").run(now.toISOString(), waveId);
+    db.prepare(`INSERT INTO replan_holds (id, campaign_id, wave_id, previous_ship_date, previous_override, new_ship_date, refund_count, refund_cents, status, hold_until, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'HOLDING', ?, ?)`).run(id, campaignId, waveId, previous.shipDate, previous.override, wave.ship_date, fresh.length,
+      fresh.reduce((sum, r) => sum + r.qty * campaign.price_cents, 0), new Date(now.getTime() + graceMs).toISOString(), now.toISOString());
+    db.exec('COMMIT');
+  } catch (error) { db.exec('ROLLBACK'); throw error; }
+  return holdOut(db.prepare('SELECT * FROM replan_holds WHERE id = ?').get(id));
+}
+
+// Undo a drag inside its grace window: restore the previous ship date and drop the held refunds.
+export function undoDragHold(campaignId: string, holdId: string, now: Date = new Date()): { ok: true; hold: ReplanHold } | { ok: false; error: string } {
+  const h = db.prepare('SELECT * FROM replan_holds WHERE id = ? AND campaign_id = ?').get(holdId, campaignId) as any;
+  if (!h) return { ok: false, error: 'That change was not found.' };
+  if (h.status !== 'HOLDING') return { ok: false, error: 'That change was already undone or replaced by a later drag.' };
+  if (Date.parse(h.hold_until) <= now.getTime()) return { ok: false, error: 'The undo window has closed and the refunds are going out.' };
+  const started = db.prepare(`SELECT 1 FROM refunds f JOIN reservations r ON r.id = f.reservation_id WHERE r.wave_id = ? AND f.created_at >= ?`).get(h.wave_id, h.created_at);
+  if (started) return { ok: false, error: 'A refund for this wave has already started, so the drag cannot be undone.' };
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const undone = db.prepare("UPDATE replan_holds SET status = 'UNDONE', resolved_at = ? WHERE id = ? AND status = 'HOLDING'").run(now.toISOString(), h.id);
+    if (Number(undone.changes) === 0) throw new Error('That change was already undone.');
+    db.prepare('UPDATE waves SET ship_date = ?, date_override = ? WHERE id = ?').run(h.previous_ship_date, h.previous_override, h.wave_id);
+    db.exec('COMMIT');
+  } catch (error) { db.exec('ROLLBACK'); return { ok: false, error: error instanceof Error ? error.message : 'Undo failed.' }; }
+  return { ok: true, hold: holdOut({ ...h, status: 'UNDONE' }) };
 }

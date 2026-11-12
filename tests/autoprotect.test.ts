@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 process.env.DATA_DIR = mkdtempSync(join(tmpdir(), 'shipday-autoprotect-'));
 const { db } = await import('../src/db.js');
-const { autoProtectCampaign, campaignLedger, refundRequestId, settleRefund, slippedCharges, refundInputFor, MAX_AUTO_ATTEMPTS, AUTO_PROTECT_REASON } = await import('../src/autoprotect.js');
+const { GRACE_MS, holdDragRefunds, undoDragHold, activeHolds, autoProtectCampaign, campaignLedger, refundRequestId, settleRefund, slippedCharges, refundInputFor, MAX_AUTO_ATTEMPTS, AUTO_PROTECT_REASON } = await import('../src/autoprotect.js');
 const { PayPalError } = await import('../src/paypal.js');
 
 const fast = { pollDelayMs: () => 0 };
@@ -167,5 +167,64 @@ describe('auto-protect ledger actor', () => {
     const result = await settleRefund(client(), refundInputFor(campaign!, rows[0]!, 'auto'), { ...fast, retryFailed: true, actor: 'merchant' });
     expect(result.status).toBe('REFUNDED');
     expect(campaignLedger(id).map(e => [e.kind, e.actor])).toEqual(expect.arrayContaining([['AUTO_REFUND_FAILED', 'auto-protect'], ['AUTO_REFUND', 'merchant']]));
+  });
+});
+
+describe('auto-protect grace period for drags', () => {
+  const t0 = new Date('2026-11-12T15:00:00.000Z');
+  const at = (ms: number) => () => new Date(t0.getTime() + ms);
+  const wave = (id: string) => db.prepare('SELECT ship_date, date_override FROM waves WHERE campaign_id = ?').get(id) as { ship_date: string; date_override: string | null };
+  function drag(id: string, to = '2027-01-15') {
+    const before = wave(id);
+    db.prepare('UPDATE waves SET ship_date = ?, date_override = ? WHERE campaign_id = ?').run(to, to, id);
+    return holdDragRefunds(id, `${id}-w`, { shipDate: before.ship_date, override: before.date_override }, t0);
+  }
+
+  it('makes no PayPal call while a drag-triggered slip is inside its grace window', async () => {
+    const id = seed(); const hold = drag(id);
+    expect(hold).toMatchObject({ refundCount: 1, refundCents: 4800, previousShipDate: '2026-12-01', newShipDate: '2027-01-15' });
+    const paypal = client();
+    expect(await autoProtectCampaign(paypal, id, { ...fast, now: at(GRACE_MS - 1_000) })).toEqual([]);
+    expect(paypal.refundCapture).not.toHaveBeenCalled();
+    expect(refund(id)).toBeUndefined();
+    expect(reservation(id).status).toBe('CHARGED');
+  });
+
+  it('undo inside the window restores the ship date and leaves zero refunds', async () => {
+    const id = seed(); const hold = drag(id)!;
+    const undone = undoDragHold(id, hold.id, at(30_000)());
+    expect(undone.ok).toBe(true);
+    expect(wave(id)).toEqual({ ship_date: '2026-12-01', date_override: null });
+    expect(activeHolds(id, at(30_000)())).toEqual([]);
+    const paypal = client();
+    for (const ms of [31_000, GRACE_MS + 1_000, 10 * GRACE_MS]) await autoProtectCampaign(paypal, id, { ...fast, now: at(ms) });
+    expect(paypal.refundCapture).not.toHaveBeenCalled();
+    expect(refund(id)).toBeUndefined();
+    expect(campaignLedger(id)).toEqual([]);
+  });
+
+  it('refunds exactly once after the window expires, and undo is then refused', async () => {
+    const id = seed(); const hold = drag(id)!;
+    const paypal = client();
+    await autoProtectCampaign(paypal, id, { ...fast, now: at(GRACE_MS + 1_000) });
+    await autoProtectCampaign(paypal, id, { ...fast, now: at(GRACE_MS + 16_000) });
+    expect(paypal.refundCapture).toHaveBeenCalledTimes(1);
+    expect(reservation(id).status).toBe('RESERVED');
+    expect(campaignLedger(id).filter(e => e.kind === 'AUTO_REFUND')).toHaveLength(1);
+    expect(undoDragHold(id, hold.id, at(GRACE_MS + 20_000)())).toMatchObject({ ok: false });
+    expect(wave(id).ship_date).toBe('2027-01-15');
+  });
+
+  it('a second drag inside the window replaces the hold and restarts the clock', async () => {
+    const id = seed(); const first = drag(id)!;
+    const second = drag(id, '2027-02-01')!;
+    expect(undoDragHold(id, first.id, t0)).toMatchObject({ ok: false });
+    expect(second.previousShipDate).toBe('2027-01-15');
+    expect(activeHolds(id, t0).map(h => h.id)).toEqual([second.id]);
+  });
+
+  it('does not hold a drag that leaves every charge inside the window', () => {
+    const id = seed();
+    expect(drag(id, '2026-12-02')).toBeNull();
   });
 });
