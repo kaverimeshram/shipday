@@ -511,3 +511,7 @@ input[type="file"] { padding: 7px 9px; font-size: 14px; }
   .setup-intro { grid-template-columns: minmax(0, 1fr); }
   .judge-path { grid-column: 1; grid-row: auto; }
 }
+.setup-page { grid-template-columns: minmax(0, 1fr); }
+@media (max-width: 700px) {
+  .gantt-frame .b-tree-cell-value .gantt-chip { font-size: 9px; padding: 1px 4px; }
+}
