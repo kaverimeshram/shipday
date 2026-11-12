@@ -83,3 +83,30 @@ export function campaignAllocations(campaignId: string) {
   return db.prepare(`SELECT a.reservation_id AS reservationId, a.wave_id AS waveId, a.qty FROM reservation_allocations a
     JOIN waves w ON w.id = a.wave_id WHERE w.campaign_id = ? ORDER BY a.wave_id, a.reservation_id`).all(campaignId) as { reservationId: string; waveId: string; qty: number }[];
 }
+
+// Auto-protect: refund lifecycle, retry bookkeeping, and the money ledger.
+function addColumn(table: string, column: string, ddl: string) {
+  if (!(db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some(c => c.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+}
+addColumn('campaigns', 'auto_protect', 'auto_protect INTEGER NOT NULL DEFAULT 1');
+addColumn('charge_attempts', 'ship_date_at_charge', 'ship_date_at_charge TEXT');
+addColumn('refunds', 'source', "source TEXT NOT NULL DEFAULT 'manual'");
+addColumn('refunds', 'attempts', 'attempts INTEGER NOT NULL DEFAULT 1');
+addColumn('refunds', 'next_attempt_at', 'next_attempt_at TEXT');
+addColumn('refunds', 'locked_until', 'locked_until TEXT');
+addColumn('refunds', 'wave_id', 'wave_id TEXT');
+addColumn('refunds', 'old_ship_date', 'old_ship_date TEXT');
+addColumn('refunds', 'new_ship_date', 'new_ship_date TEXT');
+addColumn('refunds', 'amount_cents', 'amount_cents INTEGER');
+addColumn('refunds', 'currency', 'currency TEXT');
+db.exec(`
+CREATE TABLE IF NOT EXISTS ledger_entries (
+  id TEXT PRIMARY KEY, campaign_id TEXT NOT NULL REFERENCES campaigns(id), reservation_id TEXT NOT NULL REFERENCES reservations(id),
+  refund_row_id TEXT REFERENCES refunds(id), wave_id TEXT, wave_number INTEGER, capture_id TEXT,
+  kind TEXT NOT NULL CHECK(kind IN ('AUTO_REFUND','AUTO_REFUND_FAILED','REFUND','REFUND_FAILED')), actor TEXT NOT NULL,
+  amount_cents INTEGER, currency TEXT, old_ship_date TEXT, new_ship_date TEXT, window_days INTEGER, charged_at TEXT,
+  reason TEXT NOT NULL, paypal_refund_id TEXT, paypal_status TEXT, issue TEXT, attempt INTEGER NOT NULL DEFAULT 1,
+  dedupe_key TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ledger_campaign ON ledger_entries(campaign_id, created_at);
+`);
