@@ -283,3 +283,6 @@ input[type="date"], input[type="number"] { font-family: var(--mono); font-size: 
 .dispatch-read h4 { margin: 0; font-size: 11px; letter-spacing: .09em; }
 .dispatch-read textarea { min-height: 96px; font-family: var(--mono); font-size: 13px; }
 .tracking-quote { grid-column: 2 / -1; color: var(--secondary); }
+.card-reserve { margin-top: 14px; }
+.card-reserve summary { cursor: pointer; font-size: 14px; text-decoration: underline; }
+.card-reserve .reserve-form { margin-top: 12px; }

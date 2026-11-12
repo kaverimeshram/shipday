@@ -77,6 +77,22 @@ export function createSetupToken(input: { campaignName: string; returnUrl: strin
   }, requestId);
 }
 
+export type CardInput = { name: string; number: string; expiry: string; securityCode: string };
+export function createCardSetupToken(card: CardInput, requestId: string) {
+  return request<{ id: string; status: string }>('/v3/vault/setup-tokens', {
+    method: 'POST',
+    body: JSON.stringify({ payment_source: { card: { name: card.name, number: card.number, expiry: card.expiry, security_code: card.securityCode } } }),
+  }, requestId);
+}
+
+export type VaultKind = 'paypal' | 'card';
+export function vaultPaymentSource(kind: VaultKind, vaultId: string | null | undefined) {
+  if (!vaultId) throw new Error('This reservation has no saved payment token to charge.');
+  return kind === 'card'
+    ? { card: { vault_id: vaultId, stored_credential: { payment_initiator: 'MERCHANT', payment_type: 'UNSCHEDULED', usage: 'SUBSEQUENT' } } }
+    : { paypal: { vault_id: vaultId, stored_credential: { payment_initiator: 'MERCHANT', usage: 'SUBSEQUENT' } } };
+}
+
 export const createPaymentToken = (setupTokenId: string, requestId: string) => request<{
   id: string; customer?: { id?: string }; payment_source?: { paypal?: { email_address?: string } };
 }>(
@@ -92,13 +108,13 @@ export const getPaymentTokenForCancelCheck = async (id: string): Promise<boolean
   catch (error) { if (error instanceof PayPalError && error.status === 404) return false; throw error; }
 };
 
-export function createVaultOrder(input: { vaultId: string; amount: string; currency: string; reservationId: string }, requestId: string) {
+export function createVaultOrder(input: { vaultId: string; kind: VaultKind; amount: string; currency: string; reservationId: string }, requestId: string) {
   return request<PayPalOrder>('/v2/checkout/orders', {
     method: 'POST',
     body: JSON.stringify({
       intent: 'CAPTURE',
       purchase_units: [{ reference_id: input.reservationId, amount: { currency_code: input.currency, value: input.amount } }],
-      payment_source: { paypal: { vault_id: input.vaultId, stored_credential: { payment_initiator: 'MERCHANT', usage: 'SUBSEQUENT' } } },
+      payment_source: vaultPaymentSource(input.kind, input.vaultId),
     }),
   }, requestId);
 }

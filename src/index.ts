@@ -10,7 +10,7 @@ import { z } from 'zod';
 import { campaignAllocations, db, hasLiveCapture } from './db.js';
 import { AIError, extractShipments, extractSupply, explainPlan, type SupplyExtraction } from './ai.js';
 import { chargeRefusal, ganttDependencies, ganttTasks, isChargeEligible, matchShipments, milestones, moveWave, outsideChargeWindow, planWaves, type Milestone } from './domain.js';
-import { PayPalError, addTracking, captureOrder, createPaymentToken, createSetupToken, createVaultOrder, deletePaymentToken, getOrder, getPaymentToken, getPaymentTokenForCancelCheck, getRefund, newRequestId, refundCapture, verifyWebhookSignature, type PayPalOrder } from './paypal.js';
+import { PayPalError, addTracking, captureOrder, createCardSetupToken, createPaymentToken, createSetupToken, createVaultOrder, deletePaymentToken, getOrder, getPaymentToken, getPaymentTokenForCancelCheck, getRefund, newRequestId, refundCapture, verifyWebhookSignature, type PayPalOrder } from './paypal.js';
 import { paypalPolicy } from './policy.js';
 
 const app = new Hono();
@@ -84,7 +84,7 @@ const MoveInput = z.object({ shipDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }
 const TrackingInput = z.object({ items: z.array(z.object({ reservationId: z.uuid(), trackingNumber: z.string().trim().min(3).max(100), carrier: z.string().trim().min(1).max(40) })).min(1) });
 
 app.get('/api/health', c => c.json({ ok: true, missing: missingConfig() }));
-app.get('/api/config', c => c.json({ missing: missingConfig(), bryntumLicense: process.env.BRYNTUM_LICENSE || null }));
+app.get('/api/config', c => c.json({ missing: missingConfig(), bryntumLicense: process.env.BRYNTUM_LICENSE || null, cardEntry: process.env.PAYPAL_ENV !== 'live' }));
 
 app.get('/api/events', c => streamSSE(c, async stream => {
   const send = (message: unknown) => { void stream.writeSSE({ event: 'update', data: JSON.stringify(message) }); };
@@ -147,32 +147,72 @@ app.post('/api/campaigns/:slug/reservations', async c => {
   } catch (error) { return errorResponse(c, error); }
 });
 
+async function saveVault(reservation: any, setupId: string): Promise<'RESERVED' | 'CANCELLED'> {
+  const paymentRequestId = reservation.payment_request_id || newRequestId();
+  db.prepare('UPDATE reservations SET payment_request_id = ? WHERE id = ? AND payment_request_id IS NULL').run(paymentRequestId, reservation.id);
+  const created = await createPaymentToken(setupId, paymentRequestId);
+  const token = await getPaymentToken(created.id);
+  if (token.id !== created.id || !token.customer?.id) throw new Error('PayPal payment token readback did not confirm the customer and token.');
+  const campaign = db.prepare('SELECT slug FROM campaigns WHERE id = ?').get(reservation.campaign_id) as { slug: string };
+  const finalized = db.prepare(`UPDATE reservations SET vault_id = ?, customer_id = ?, email = ?, status = 'RESERVED' WHERE id = ? AND status = 'PENDING'`)
+    .run(token.id, token.customer.id, token.payment_source?.paypal?.email_address || reservation.email, reservation.id);
+  if (Number(finalized.changes) === 0) {
+    const cancelId = newRequestId();
+    db.prepare('UPDATE reservations SET cancel_request_id = ? WHERE id = ? AND cancel_request_id IS NULL').run(cancelId, reservation.id);
+    await deletePaymentToken(token.id, cancelId);
+    if (await getPaymentTokenForCancelCheck(token.id)) throw new Error('Reservation was cancelled, but PayPal still returns the saved payment token.');
+    emit('reservation', campaign.slug);
+    return 'CANCELLED';
+  }
+  emit('reservation', campaign.slug);
+  return 'RESERVED';
+}
+
 app.get('/api/paypal/approved', async c => {
   const setupId = c.req.query('token');
   if (!setupId) return c.redirect('/?paypal=missing-token');
   const reservation = db.prepare("SELECT * FROM reservations WHERE setup_token_id = ? AND status = 'PENDING'").get(setupId) as any;
   if (!reservation) return c.redirect('/?paypal=reservation-not-found');
   try {
-    const paymentRequestId = reservation.payment_request_id || newRequestId();
-    db.prepare('UPDATE reservations SET payment_request_id = ? WHERE id = ? AND payment_request_id IS NULL').run(paymentRequestId, reservation.id);
-    const created = await createPaymentToken(setupId, paymentRequestId);
-    const token = await getPaymentToken(created.id);
-    if (token.id !== created.id || !token.customer?.id) throw new Error('PayPal payment token readback did not confirm the customer and token.');
-    const finalized = db.prepare(`UPDATE reservations SET vault_id = ?, customer_id = ?, email = ?, status = 'RESERVED' WHERE id = ? AND status = 'PENDING'`)
-      .run(token.id, token.customer.id, token.payment_source?.paypal?.email_address || reservation.email, reservation.id);
-    if (Number(finalized.changes) === 0) {
-      const cancelId = newRequestId();
-      db.prepare('UPDATE reservations SET cancel_request_id = ? WHERE id = ? AND cancel_request_id IS NULL').run(cancelId, reservation.id);
-      await deletePaymentToken(token.id, cancelId);
-      if (await getPaymentTokenForCancelCheck(token.id)) throw new Error('Reservation was cancelled, but PayPal still returns the saved payment token.');
-      const campaign = db.prepare('SELECT slug FROM campaigns WHERE id = ?').get(reservation.campaign_id) as { slug: string };
-      emit('reservation', campaign.slug);
-      return c.redirect(`/r/${reservation.id}?paypal=cancelled`);
-    }
-    const campaign = db.prepare('SELECT slug FROM campaigns WHERE id = ?').get(reservation.campaign_id) as { slug: string };
-    emit('reservation', campaign.slug);
-    return c.redirect(`/r/${reservation.id}?paypal=reserved`);
+    const outcome = await saveVault(reservation, setupId);
+    return c.redirect(`/r/${reservation.id}?paypal=${outcome === 'RESERVED' ? 'reserved' : 'cancelled'}`);
   } catch (error) { return c.redirect(`/r/${reservation.id}?paypal=${encodeURIComponent(error instanceof Error ? error.message : 'failed')}`); }
+});
+
+const cardEntry = () => process.env.PAYPAL_ENV !== 'live';
+const CardReserveInput = ReserveInput.extend({
+  name: z.string().trim().min(2, 'Enter the name on the card.').max(300),
+  number: z.string().regex(/^\d{12,19}$/, 'Enter the card number digits.'),
+  expiry: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'Enter the card expiry month.'),
+  securityCode: z.string().regex(/^\d{3,4}$/, 'Enter the card security code.'),
+});
+
+// The card goes to PayPal once and is never stored or logged here; PayPal returns a vault token.
+app.post('/api/campaigns/:slug/reservations/card', async c => {
+  if (!cardEntry()) return c.json({ error: 'Card entry is available with PayPal sandbox credentials.' }, 404);
+  if (!process.env.PAYPAL_CLIENT_ID || !process.env.PAYPAL_CLIENT_SECRET) return c.json({ error: 'PayPal setup is required to reserve. Set PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET.' }, 503);
+  const campaign = campaignBySlug(c.req.param('slug'));
+  if (!campaign) return c.json({ error: 'Campaign not found.' }, 404);
+  const parsed = CardReserveInput.safeParse(await c.req.json());
+  if (!parsed.success) return c.json({ error: parsed.error.issues[0]?.message || 'Card details are invalid.' }, 400);
+  const { email, qty, name, number, expiry, securityCode } = parsed.data;
+  if (campaignAvailability(campaign.id).reserved + qty > campaign.quantity) return c.json({ error: 'There are not enough units left for this reservation.' }, 409);
+  const id = randomUUID();
+  const setupRequestId = newRequestId();
+  const position = (db.prepare('SELECT COALESCE(MAX(position), 0) + 1 AS next FROM reservations WHERE campaign_id = ?').get(campaign.id) as { next: number }).next;
+  db.prepare(`INSERT INTO reservations (id, campaign_id, email, qty, position, status, setup_request_id, payment_kind, created_at)
+    VALUES (?, ?, ?, ?, ?, 'PENDING', ?, 'card', ?)`).run(id, campaign.id, email.toLowerCase(), qty, position, setupRequestId, nowIso());
+  try {
+    const setup = await createCardSetupToken({ name, number, expiry, securityCode }, setupRequestId);
+    db.prepare('UPDATE reservations SET setup_token_id = ? WHERE id = ?').run(setup.id, id);
+    if (setup.status !== 'APPROVED') throw new Error(`PayPal returned card setup status ${setup.status}.`);
+    const reservation = db.prepare('SELECT * FROM reservations WHERE id = ?').get(id);
+    const outcome = await saveVault(reservation, setup.id);
+    return c.json({ reservationId: id, status: outcome, path: `/r/${id}?paypal=reserved` }, 201);
+  } catch (error) {
+    db.prepare("UPDATE reservations SET status = 'CANCELLED' WHERE id = ? AND status = 'PENDING' AND vault_id IS NULL").run(id);
+    return errorResponse(c, error);
+  }
 });
 
 app.post('/api/reservations/:id/cancel', async c => {
@@ -452,7 +492,7 @@ async function chargeReservation(campaign: CampaignRow, reservation: any) {
   }
   try {
     if (!attempt.paypal_order_id) {
-      const created = await createVaultOrder({ vaultId: reservation.vault_id, amount: (campaign.price_cents * reservation.qty / 100).toFixed(2), currency: campaign.currency, reservationId: reservation.id }, attempt.paypal_request_id);
+      const created = await createVaultOrder({ vaultId: reservation.vault_id, kind: reservation.payment_kind, amount: (campaign.price_cents * reservation.qty / 100).toFixed(2), currency: campaign.currency, reservationId: reservation.id }, attempt.paypal_request_id);
       db.prepare('UPDATE charge_attempts SET paypal_order_id = ? WHERE id = ?').run(created.id, attempt.id);
       db.prepare('UPDATE reservations SET paypal_order_id = ? WHERE id = ?').run(created.id, reservation.id);
       attempt.paypal_order_id = created.id;
@@ -534,13 +574,13 @@ function markDeclined(attempt: any, reservation: any, issue: string) {
 
 async function reconcilePending() {
   if (!process.env.PAYPAL_CLIENT_ID || !process.env.PAYPAL_CLIENT_SECRET) return;
-  const attempts = db.prepare(`SELECT a.*, r.campaign_id, r.id AS reservation_id, r.vault_id, r.qty, c.price_cents, c.currency, c.slug
+  const attempts = db.prepare(`SELECT a.*, r.campaign_id, r.id AS reservation_id, r.vault_id, r.payment_kind, r.qty, c.price_cents, c.currency, c.slug
     FROM charge_attempts a JOIN reservations r ON r.id = a.reservation_id JOIN campaigns c ON c.id = r.campaign_id
     WHERE a.status = 'PENDING'`).all() as any[];
   for (const attempt of attempts) {
     try {
       if (!attempt.paypal_order_id) {
-        const created = await createVaultOrder({ vaultId: attempt.vault_id, amount: (attempt.price_cents * attempt.qty / 100).toFixed(2), currency: attempt.currency, reservationId: attempt.reservation_id }, attempt.paypal_request_id);
+        const created = await createVaultOrder({ vaultId: attempt.vault_id, kind: attempt.payment_kind, amount: (attempt.price_cents * attempt.qty / 100).toFixed(2), currency: attempt.currency, reservationId: attempt.reservation_id }, attempt.paypal_request_id);
         db.prepare('UPDATE charge_attempts SET paypal_order_id = ? WHERE id = ?').run(created.id, attempt.id);
         db.prepare('UPDATE reservations SET paypal_order_id = ? WHERE id = ?').run(created.id, attempt.reservation_id);
         attempt.paypal_order_id = created.id;

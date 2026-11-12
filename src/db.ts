@@ -62,6 +62,10 @@ CREATE TABLE IF NOT EXISTS refunds (
 );
 `);
 
+if (!(db.prepare('PRAGMA table_info(reservations)').all() as { name: string }[]).some(c => c.name === 'payment_kind')) {
+  db.exec("ALTER TABLE reservations ADD COLUMN payment_kind TEXT NOT NULL DEFAULT 'paypal' CHECK(payment_kind IN ('paypal','card'))");
+}
+
 export function hasLiveCapture(reservationId: string): boolean {
   return Boolean(db.prepare(`SELECT 1 FROM charge_attempts a WHERE a.reservation_id = ? AND a.status = 'COMPLETED'
     AND NOT EXISTS (SELECT 1 FROM refunds f WHERE f.charge_attempt_id = a.id AND f.status = 'COMPLETED')`).get(reservationId));
