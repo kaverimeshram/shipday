@@ -20,7 +20,7 @@ export const SupplyExtractionSchema = z.object({
   if (v.date === null && v.eta === null) ctx.addIssue({ code: 'custom', path: ['date'], message: 'Provide a source date or ETA.' });
   if ((v.units === null) !== (v.field_quotes.units === null)) ctx.addIssue({ code: 'custom', path: ['field_quotes', 'units'], message: 'Units and its quote must both be present or absent.' });
   for (const [field, quote] of Object.entries(v.field_quotes)) {
-    if (quote && !v.quotes.includes(quote)) ctx.addIssue({ code: 'custom', path: ['field_quotes', field], message: 'Field quote must also appear in quotes.' });
+    if (quote && !v.quotes.some(sentence => sentence.includes(quote))) ctx.addIssue({ code: 'custom', path: ['field_quotes', field], message: 'Field quote must come from one of the quoted sentences.' });
   }
 });
 
@@ -58,7 +58,7 @@ export async function extractSupply(input: { text: string; file?: { name: string
   const model = process.env.AI_MODEL || 'google/gemini-2.5-flash';
   const parts: (InputPart | { type: 'text'; text: string })[] = [{
     type: 'text',
-    text: `Extract one supply update from the provided source. Return only facts supported by the source. Do not infer missing quantities, places, dates, or milestones. A date must be YYYY-MM-DD; if the source gives a relative or unclear ETA, put it in eta and set date null. Copy exact complete source sentences into quotes and field_quotes. Use null for unsupported optional values and for unsupported units. Every non-null field_quote must occur in quotes.\n\nSource text:\n${input.text || '(See attached file.)'}`,
+    text: `Extract one supply update from the provided source. Return only facts supported by the source. Do not infer missing quantities, places, dates, or milestones. A date must be YYYY-MM-DD. Today is ${new Date().toISOString().slice(0, 10)}; when the source gives a day and month without a year, use the year that puts the date closest to today. If the source gives a relative or unclear ETA, put it in eta and set date null. Copy exact complete source sentences into quotes and field_quotes. Use null for unsupported optional values and for unsupported units. Every non-null field_quote must be an exact excerpt of one of the quotes.\n\nSource text:\n${input.text || '(See attached file.)'}`,
   }];
   if (input.file) {
     const data = Buffer.from(input.file.bytes).toString('base64');

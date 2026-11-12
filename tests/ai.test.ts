@@ -20,6 +20,16 @@ describe('supply evidence validation', () => {
     expect(() => parseSupplyExtraction(JSON.stringify(fabricated), source)).toThrow('not found verbatim');
   });
 
+  it('accepts a field quote that is a fragment of a quoted sentence', () => {
+    const fragments = { ...output, field_quotes: { ...output.field_quotes, units: '240 units', date: '2026-11-12' } };
+    expect(parseSupplyExtraction(JSON.stringify(fragments), source).field_quotes.units).toBe('240 units');
+  });
+
+  it('rejects a field quote that no quoted sentence contains', () => {
+    const unlinked = { ...output, field_quotes: { ...output.field_quotes, units: 'production run' }, quotes: ['240 units is complete on 2026-11-12.'] };
+    expect(() => parseSupplyExtraction(JSON.stringify(unlinked), source)).toThrow('Field quote must come from one of the quoted sentences');
+  });
+
   it('rejects unsupported dates and missing evidence', () => {
     expect(() => parseSupplyExtraction(JSON.stringify({ ...output, date: 'next week', quotes: [] }))).toThrow();
   });
