@@ -1,6 +1,6 @@
 # Shipday
 
-Shipday gives independent publishers and small-batch makers a shipping plan for pre-orders. Buyers save PayPal at reservation time. Merchants confirm production or freight updates, allocate units into shipping waves, and charge each reservation when its wave enters the configured charge window.
+Shipday gives independent publishers and small-batch makers a shipping plan for pre-orders. Buyers save PayPal at reservation time. Merchants confirm production or freight updates, allocate units into shipping waves, and charge each reservation when its wave enters the configured charge window. When a charged wave slips past that window, Shipday refunds it through PayPal and charges the same saved PayPal again when the new window opens. On ship day, AI reads the warehouse dispatch email into PayPal tracking for every order.
 
 The buyer gets one clear ship date and a private reservation page. The merchant gets a live production schedule, source-linked supply extraction, per-reservation PayPal outcomes, and tracking confirmation.
 
@@ -12,13 +12,15 @@ Live app: https://shipday-preorders.fly.dev
 2. Open its buyer link, `/p/<slug>`, and reserve with a PayPal sandbox buyer. PayPal saves the wallet through Vault. Nothing is charged.
 3. In the merchant plan, paste `examples/freight-update-example.txt` into Supply in and press Read update. Each extracted field (480 units, departed, 12 Nov, Yantian, Long Beach, MSC ARIANE) sits beside the sentence it came from. Confirm it.
 4. Wave 1 lands on the Gantt with ship day 3 December: the 12 Nov departure plus the 21 day freight lead. The orange bar is the open charge window. Drag the Ship bar into the past and the charge button locks with the reason; drag it forward and the window reopens.
-5. Charge Wave 1. Each reservation shows its PayPal capture id once PayPal reads the capture back as COMPLETED, and the buyer's `/r/<id>` page becomes a receipt. Add a carrier and tracking number to mark it shipped.
+5. Charge Wave 1. Each reservation shows its PayPal capture id once PayPal reads the capture back as COMPLETED, and the buyer's `/r/<id>` page becomes a receipt.
+6. Drag the charged wave's Ship bar more than 30 days past today. The Gantt row turns red, "Charged too early: refund due", and the wave card offers the refund. Refund it: each reservation shows its PayPal refund id, returns to Reserved on the same saved PayPal, and its buyer page reads "Refunded. Still reserved." Drag the bar back and charge again.
+7. Paste `examples/dispatch-confirmation-example.txt` into Read dispatch confirmation. Order #1's carrier and tracking number fill in with the email line they came from. Save, and Shipday posts the tracker to the PayPal order and reads it back.
 
 ## PayPal and AI
 
-Shipday uses PayPal Vault v3 setup tokens and payment tokens to save buyer-approved PayPal wallets without charging at reservation. It uses Orders v2 for merchant-initiated captures and order tracking. Mutations use persisted PayPal request IDs and read back their resulting state.
+Shipday uses PayPal Vault v3 setup tokens and payment tokens to save buyer-approved PayPal wallets without charging at reservation. It uses Orders v2 for merchant-initiated captures and order tracking, and Payments v2 to refund and read back any capture whose wave slips outside its charge window. Mutations use persisted PayPal request IDs and read back their resulting state.
 
-OpenRouter reads supplier emails, PDFs, and photos into validated production or freight milestones. Every extracted field is shown with a source quote for merchant review. Plan explanations use only confirmed milestones, dates, and quotes. The schedule and reservation allocation rules are deterministic.
+OpenRouter reads supplier emails, PDFs, and photos into validated production or freight milestones. Every extracted field is shown with a source quote for merchant review. Carrier and warehouse dispatch emails become per-parcel tracking numbers, each one required to appear inside a verbatim line of the email before it reaches PayPal. Plan explanations use only confirmed milestones, dates, and quotes. The schedule and reservation allocation rules are deterministic.
 
 ## Run locally
 
