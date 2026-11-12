@@ -1,6 +1,7 @@
 import { serve } from '@hono/node-server';
 import { streamSSE } from 'hono/streaming';
 import { getCookie, setCookie } from 'hono/cookie';
+import { cors } from 'hono/cors';
 import { Hono } from 'hono';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -13,6 +14,7 @@ import { PayPalError, addTracking, captureOrder, createPaymentToken, createSetup
 import { paypalPolicy } from './policy.js';
 
 const app = new Hono();
+app.use('/api/*', cors({ origin: publicUrl(), allowMethods: ['GET', 'POST', 'OPTIONS'], allowHeaders: ['Content-Type'], credentials: true }));
 const clients = new Set<(message: unknown) => void>();
 const nowIso = () => new Date().toISOString();
 const hash = (value: string) => createHash('sha256').update(value).digest();
