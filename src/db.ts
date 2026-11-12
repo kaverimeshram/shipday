@@ -88,7 +88,7 @@ export function campaignAllocations(campaignId: string) {
 function addColumn(table: string, column: string, ddl: string) {
   if (!(db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some(c => c.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
 }
-addColumn('campaigns', 'auto_protect', 'auto_protect INTEGER NOT NULL DEFAULT 1');
+addColumn('campaigns', 'auto_protect', 'auto_protect INTEGER NOT NULL DEFAULT 0');
 addColumn('charge_attempts', 'ship_date_at_charge', 'ship_date_at_charge TEXT');
 addColumn('refunds', 'source', "source TEXT NOT NULL DEFAULT 'manual'");
 addColumn('refunds', 'attempts', 'attempts INTEGER NOT NULL DEFAULT 1');
