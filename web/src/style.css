@@ -531,7 +531,7 @@ input[type="file"] { padding: 7px 9px; font-size: 14px; }
 .autorefunded-note { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0 0; padding: 10px; border: 1px solid var(--refunded); background: var(--refunded-wash); color: #1f4a2f; font-size: 13px; }
 .proof.proof-refunded { color: var(--refunded); font-weight: 600; }
 .autoprotect-toggle { display: inline-flex; align-items: flex-start; gap: 8px; max-width: 330px; margin-left: auto; margin-right: 16px; font-size: 13px; color: var(--secondary); cursor: pointer; }
-.autoprotect-toggle input { margin-top: 3px; accent-color: var(--refunded); }
+.autoprotect-toggle input { flex: none; width: 18px; height: 18px; min-height: 0; margin: 2px 0 0; padding: 0; accent-color: var(--refunded); }
 .autoprotect-toggle strong { display: block; color: var(--ink); }
 .ledger-section { margin-top: 40px; }
 .ledger-list { max-width: 960px; margin: 0; padding: 0; list-style: none; }
