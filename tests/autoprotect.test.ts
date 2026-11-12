@@ -219,8 +219,19 @@ describe('auto-protect grace period for drags', () => {
     const id = seed(); const first = drag(id)!;
     const second = drag(id, '2027-02-01')!;
     expect(undoDragHold(id, first.id, t0)).toMatchObject({ ok: false });
-    expect(second.previousShipDate).toBe('2027-01-15');
+    expect(second.previousShipDate).toBe('2026-12-01');
     expect(activeHolds(id, t0).map(h => h.id)).toEqual([second.id]);
+  });
+
+  it('undo after two drags returns the wave to its pre-drag date and sends no refund', async () => {
+    const id = seed(); drag(id);
+    const second = drag(id, '2027-02-01')!;
+    expect(undoDragHold(id, second.id, at(30_000)())).toMatchObject({ ok: true });
+    expect(wave(id)).toEqual({ ship_date: '2026-12-01', date_override: null });
+    const paypal = client();
+    for (const ms of [GRACE_MS + 1_000, GRACE_MS + 16_000, 10 * GRACE_MS]) await autoProtectCampaign(paypal, id, { ...fast, now: at(ms) });
+    expect(paypal.refundCapture).toHaveBeenCalledTimes(0);
+    expect(refund(id)).toBeUndefined();
   });
 
   it('does not hold a drag that leaves every charge inside the window', () => {

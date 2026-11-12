@@ -264,10 +264,13 @@ export function holdDragRefunds(campaignId: string, waveId: string, previous: { 
   const id = randomUUID();
   db.exec('BEGIN IMMEDIATE');
   try {
-    // A second drag inside the window replaces the first hold; undo then steps back one drag.
+    // A second drag inside the window replaces the first hold. It keeps the first hold's pre-drag date,
+    // so undo returns the wave to where it was before any held drag and no slipped date is left behind.
+    const replaced = db.prepare("SELECT previous_ship_date, previous_override FROM replan_holds WHERE wave_id = ? AND status = 'HOLDING' ORDER BY created_at LIMIT 1").get(waveId) as { previous_ship_date: string; previous_override: string | null } | undefined;
+    const origin = replaced ? { shipDate: replaced.previous_ship_date, override: replaced.previous_override } : previous;
     db.prepare("UPDATE replan_holds SET status = 'SUPERSEDED', resolved_at = ? WHERE wave_id = ? AND status = 'HOLDING'").run(now.toISOString(), waveId);
     db.prepare(`INSERT INTO replan_holds (id, campaign_id, wave_id, previous_ship_date, previous_override, new_ship_date, refund_count, refund_cents, status, hold_until, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'HOLDING', ?, ?)`).run(id, campaignId, waveId, previous.shipDate, previous.override, wave.ship_date, fresh.length,
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'HOLDING', ?, ?)`).run(id, campaignId, waveId, origin.shipDate, origin.override, wave.ship_date, fresh.length,
       fresh.reduce((sum, r) => sum + r.qty * campaign.price_cents, 0), new Date(now.getTime() + graceMs).toISOString(), now.toISOString());
     db.exec('COMMIT');
   } catch (error) { db.exec('ROLLBACK'); throw error; }
