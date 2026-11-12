@@ -543,6 +543,7 @@ input[type="file"] { padding: 7px 9px; font-size: 14px; }
 .ledger-actor { font-size: 12px; color: var(--muted); }
 .autorefund-banner { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px; align-items: start; margin: 0 0 20px; padding: 14px 16px; border: 1px solid var(--refunded); border-left-width: 6px; background: var(--refunded-wash); color: #1f4a2f; }
 .autorefund-banner p { margin: 0; font-size: 16px; }
+.autorefund-banner .gantt-chip { justify-self: start; }
 @media (max-width: 640px) {
   .autoprotect-toggle { margin: 10px 0 0; max-width: none; }
   .ledger-list li { grid-template-columns: 1fr; gap: 4px; }
