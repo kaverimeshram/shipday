@@ -44,7 +44,7 @@ describe('reservation wave planning', () => {
     const updated = planWaves(
       [{ id: 'wave', units: 2, milestone: 'departed', eventDate: '2026-11-15' }],
       [
-        { id: 'captured', qty: 2, position: 1, status: 'CHARGED', captureId: 'capture-1', allocations: [{ reservationId: 'captured', waveId: 'wave', qty: 2 }] },
+        { id: 'captured', qty: 2, position: 1, status: 'CHARGE_PENDING', allocations: [{ reservationId: 'captured', waveId: 'wave', qty: 2 }] },
         { id: 'next', qty: 2, position: 2 },
       ],
     );
@@ -74,7 +74,7 @@ describe('charge idempotency and cancellation', () => {
   });
 
   it('refuses to charge a reservation while a charge attempt is in flight', () => {
-    expect(chargeRefusal('CHARGE_PENDING', false)).toContain('already been charged');
+    expect(chargeRefusal('CHARGE_PENDING', false)).toContain('already in progress');
   });
 
   it('allows cancellation only before charge begins', () => {

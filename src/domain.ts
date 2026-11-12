@@ -1,7 +1,7 @@
 export const milestones = ['production_complete', 'departed', 'arrived_port', 'arrived_warehouse', 'delayed'] as const;
 export type Milestone = (typeof milestones)[number];
 
-export type Reservation = { id: string; qty: number; position: number };
+export type Reservation = { id: string; qty: number; position: number; status?: string; captureId?: string | null; waveId?: string | null; allocations?: Allocation[] };
 export type Supply = { id: string; units: number; milestone: Milestone; eventDate: string };
 export type Wave = { id: string; number: number; units: number; shipDate: string };
 export type Allocation = { reservationId: string; waveId: string; qty: number };
@@ -27,6 +27,13 @@ export function planWaves(supplies: Supply[], reservations: Reservation[]) {
   const allocations: Allocation[] = [];
   for (const reservation of [...reservations].sort((a, b) => a.position - b.position)) {
     if (!Number.isInteger(reservation.qty) || reservation.qty < 1) throw new Error('Reservation quantity must be a positive integer');
+    if (reservation.captureId || ['CHARGE_PENDING', 'CHARGED', 'SHIPPED'].includes(reservation.status || '')) {
+      const pinned = reservation.allocations?.length
+        ? reservation.allocations
+        : reservation.waveId ? [{ reservationId: reservation.id, waveId: reservation.waveId, qty: reservation.qty }] : [];
+      allocations.push(...pinned);
+      continue;
+    }
     let left = reservation.qty;
     for (const wave of waves) {
       const available = remaining.get(wave.id) ?? 0;
@@ -51,8 +58,9 @@ export function isChargeEligible(shipDate: string, now: Date, windowDays: number
 }
 
 export function chargeRefusal(status: string, alreadyHasCapture: boolean): string | null {
+  if (status === 'CHARGE_PENDING') return 'A charge attempt is already in progress.';
   if (alreadyHasCapture || status === 'CHARGED' || status === 'SHIPPED') return 'This reservation has already been charged.';
-  if (!['RESERVED', 'DECLINED', 'CHARGE_PENDING'].includes(status)) return `Reservation status ${status} cannot be charged.`;
+  if (!['RESERVED', 'DECLINED'].includes(status)) return `Reservation status ${status} cannot be charged.`;
   return null;
 }
 

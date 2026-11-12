@@ -347,7 +347,7 @@ app.get('*', async c => {
 
 function rebuildPlan(campaign: CampaignRow) {
   const supplies = db.prepare('SELECT id, units, milestone, event_date FROM supply_updates WHERE campaign_id = ? ORDER BY event_date, confirmed_at').all(campaign.id) as { id: string; units: number; milestone: Milestone; event_date: string }[];
-  const reservations = db.prepare("SELECT id, qty, position FROM reservations WHERE campaign_id = ? AND status IN ('RESERVED','DECLINED','CHARGE_PENDING','CHARGED','SHIPPED') ORDER BY position").all(campaign.id) as { id: string; qty: number; position: number }[];
+  const reservations = plannedReservations(campaign.id);
   const prior = new Map((db.prepare('SELECT id, date_override FROM waves WHERE campaign_id = ?').all(campaign.id) as { id: string; date_override: string | null }[]).map(w => [w.id, w.date_override]));
   const plan = planWaves(supplies.map(s => ({ id: s.id, units: s.units, milestone: s.milestone, eventDate: s.event_date })), reservations);
   return persistPlan(campaign, plan, prior);
@@ -356,16 +356,28 @@ function rebuildPlan(campaign: CampaignRow) {
 function refreshWaveData(campaign: CampaignRow) {
   const waves = db.prepare('SELECT * FROM waves WHERE campaign_id = ? ORDER BY number').all(campaign.id) as any[];
   const supplies = db.prepare('SELECT id, units, milestone, event_date FROM supply_updates WHERE campaign_id = ? ORDER BY event_date, confirmed_at').all(campaign.id) as { id: string; units: number; milestone: Milestone; event_date: string }[];
-  const reservations = db.prepare("SELECT id, qty, position FROM reservations WHERE campaign_id = ? AND status IN ('RESERVED','DECLINED','CHARGE_PENDING','CHARGED','SHIPPED') ORDER BY position").all(campaign.id) as { id: string; qty: number; position: number }[];
+  const reservations = plannedReservations(campaign.id);
   const plan = planWaves(supplies.map(s => ({ id: s.id, units: s.units, milestone: s.milestone, eventDate: s.event_date })), reservations);
   return persistPlan(campaign, plan, new Map(waves.map(w => [w.id, w.date_override || w.ship_date])));
+}
+
+function plannedReservations(campaignId: string) {
+  const rows = db.prepare(`SELECT r.id, r.qty, r.position, r.status, r.capture_id, r.wave_id, a.wave_id AS allocation_wave_id, a.qty AS allocation_qty
+    FROM reservations r LEFT JOIN reservation_allocations a ON a.reservation_id = r.id
+    WHERE r.campaign_id = ? AND r.status IN ('RESERVED','DECLINED','CHARGE_PENDING','CHARGED','SHIPPED')
+    ORDER BY r.position, a.wave_id`).all(campaignId) as { id: string; qty: number; position: number; status: string; capture_id: string | null; wave_id: string | null; allocation_wave_id: string | null; allocation_qty: number | null }[];
+  return [...new Map(rows.map(row => [row.id, {
+    id: row.id, qty: row.qty, position: row.position, status: row.status, captureId: row.capture_id, waveId: row.wave_id,
+    allocations: rows.filter(allocation => allocation.id === row.id && allocation.allocation_wave_id)
+      .map(allocation => ({ reservationId: row.id, waveId: allocation.allocation_wave_id!, qty: allocation.allocation_qty! })),
+  }])).values()];
 }
 
 function persistPlan(campaign: CampaignRow, plan: ReturnType<typeof planWaves>, overrides: Map<string, string | null>) {
   db.exec('BEGIN IMMEDIATE');
   try {
     db.prepare('DELETE FROM waves WHERE campaign_id = ?').run(campaign.id);
-    db.prepare('UPDATE reservations SET wave_id = NULL WHERE campaign_id = ?').run(campaign.id);
+    db.prepare("UPDATE reservations SET wave_id = NULL WHERE campaign_id = ? AND capture_id IS NULL AND status NOT IN ('CHARGE_PENDING','CHARGED','SHIPPED')").run(campaign.id);
     for (const wave of plan.waves) {
       const date = overrides.get(wave.id) || wave.shipDate;
       db.prepare('INSERT INTO waves (id, campaign_id, number, units, ship_date, date_override) VALUES (?, ?, ?, ?, ?, ?)')
@@ -374,7 +386,7 @@ function persistPlan(campaign: CampaignRow, plan: ReturnType<typeof planWaves>, 
     for (const allocation of plan.allocations) db.prepare('INSERT INTO reservation_allocations (reservation_id, wave_id, qty) VALUES (?, ?, ?)').run(allocation.reservationId, allocation.waveId, allocation.qty);
     for (const reservation of plan.allocations.map(a => a.reservationId).filter((id, i, all) => all.indexOf(id) === i)) {
       const latest = plan.allocations.filter(a => a.reservationId === reservation).at(-1)?.waveId;
-      if (latest) db.prepare('UPDATE reservations SET wave_id = ? WHERE id = ?').run(latest, reservation);
+      if (latest) db.prepare("UPDATE reservations SET wave_id = ? WHERE id = ? AND capture_id IS NULL AND status NOT IN ('CHARGE_PENDING','CHARGED','SHIPPED')").run(latest, reservation);
     }
     db.exec('COMMIT');
   } catch (error) { db.exec('ROLLBACK'); throw error; }
