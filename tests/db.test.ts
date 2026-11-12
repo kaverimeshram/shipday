@@ -34,3 +34,11 @@ describe('live capture guard', () => {
     expect(hasLiveCapture('c3-r')).toBe(false);
   });
 });
+
+describe('campaign description', () => {
+  it('stores a merchant product description', () => {
+    db.prepare(`INSERT INTO campaigns (id, slug, name, description, price_cents, currency, quantity, ship_date, merchant_key_hash, created_at)
+      VALUES ('d1', 'd1', 'Game', 'Tile laying on a tidal coast.', 100, 'USD', 5, '2026-12-01', 'x', '2026-11-12')`).run();
+    expect(db.prepare("SELECT description FROM campaigns WHERE id = 'd1'").get()).toEqual({ description: 'Tile laying on a tidal coast.' });
+  });
+});

@@ -66,6 +66,10 @@ if (!(db.prepare('PRAGMA table_info(campaigns)').all() as { name: string }[]).so
   db.exec('ALTER TABLE campaigns ADD COLUMN archived_at TEXT');
 }
 
+if (!(db.prepare('PRAGMA table_info(campaigns)').all() as { name: string }[]).some(c => c.name === 'description')) {
+  db.exec('ALTER TABLE campaigns ADD COLUMN description TEXT');
+}
+
 if (!(db.prepare('PRAGMA table_info(reservations)').all() as { name: string }[]).some(c => c.name === 'payment_kind')) {
   db.exec("ALTER TABLE reservations ADD COLUMN payment_kind TEXT NOT NULL DEFAULT 'paypal' CHECK(payment_kind IN ('paypal','card'))");
 }

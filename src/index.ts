@@ -39,7 +39,7 @@ function missingConfig() {
 }
 
 type CampaignRow = {
-  id: string; slug: string; name: string; image_url: string | null; price_cents: number; currency: string;
+  id: string; slug: string; name: string; description: string | null; image_url: string | null; price_cents: number; currency: string;
   quantity: number; ship_date: string; charge_window_days: number; merchant_key_hash: Uint8Array; created_at: string;
 };
 const campaignBySlug = (slug: string) => db.prepare('SELECT * FROM campaigns WHERE slug = ? AND archived_at IS NULL').get(slug) as CampaignRow | undefined;
@@ -74,7 +74,7 @@ function campaignAvailability(id: string) {
 }
 
 const CampaignInput = z.object({
-  name: z.string().trim().min(2).max(100), imageUrl: z.string().url().optional().or(z.literal('')),
+  name: z.string().trim().min(2).max(100), description: z.string().trim().max(600).optional().transform(v => v || null), imageUrl: z.string().url().optional().or(z.literal('')),
   priceCents: z.number().int().min(1).max(100_000_000), currency: z.string().regex(/^[A-Z]{3}$/),
   quantity: z.number().int().min(1).max(100_000), shipDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   chargeWindowDays: z.number().int().min(0).max(365).default(20),
@@ -90,7 +90,7 @@ const MoveInput = z.object({ shipDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }
 const TrackingInput = z.object({ items: z.array(z.object({ reservationId: z.uuid(), trackingNumber: z.string().trim().min(3).max(100), carrier: z.string().trim().min(1).max(40) })).min(1) });
 
 app.get('/api/health', c => c.json({ ok: true, missing: missingConfig() }));
-app.get('/api/config', c => c.json({ missing: missingConfig(), bryntumLicense: process.env.BRYNTUM_LICENSE || null, cardEntry: process.env.PAYPAL_ENV !== 'live' }));
+app.get('/api/config', c => c.json({ missing: missingConfig(), bryntumLicense: process.env.BRYNTUM_LICENSE || null, cardEntry: process.env.PAYPAL_ENV !== 'live', demoSlug: process.env.DEMO_CAMPAIGN_SLUG || null }));
 
 app.get('/media/:id', async c => {
   const id = c.req.param('id');
@@ -151,9 +151,9 @@ app.post('/api/campaigns', bodyLimit({ maxSize: 5 * 1024 * 1024 + 65_536 }), asy
   const slug = `${input.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 35)}-${randomBytes(3).toString('hex')}`;
   const merchantKey = randomBytes(32).toString('base64url');
   try {
-    db.prepare(`INSERT INTO campaigns (id, slug, name, image_url, price_cents, currency, quantity, ship_date, charge_window_days, merchant_key_hash, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .run(id, slug, input.name, storedImage?.path || input.imageUrl || null, input.priceCents, input.currency, input.quantity, input.shipDate, input.chargeWindowDays, hash(merchantKey), nowIso());
+    db.prepare(`INSERT INTO campaigns (id, slug, name, description, image_url, price_cents, currency, quantity, ship_date, charge_window_days, merchant_key_hash, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(id, slug, input.name, input.description, storedImage?.path || input.imageUrl || null, input.priceCents, input.currency, input.quantity, input.shipDate, input.chargeWindowDays, hash(merchantKey), nowIso());
   } catch (error) {
     if (storedImage) await storedImage.cleanup();
     throw error;
@@ -169,7 +169,7 @@ app.get('/api/campaigns/:slug', c => {
   const campaign = campaignBySlug(c.req.param('slug'));
   if (!campaign) return c.json({ error: 'Campaign not found.' }, 404);
   const { reserved } = campaignAvailability(campaign.id);
-  return c.json({ id: campaign.id, slug: campaign.slug, name: campaign.name, imageUrl: campaign.image_url, priceCents: campaign.price_cents, currency: campaign.currency, quantity: campaign.quantity, available: Math.max(0, campaign.quantity - reserved), shipDate: campaign.ship_date, chargeWindowDays: campaign.charge_window_days, policy: paypalPolicy });
+  return c.json({ id: campaign.id, slug: campaign.slug, name: campaign.name, description: campaign.description, imageUrl: campaign.image_url, priceCents: campaign.price_cents, currency: campaign.currency, quantity: campaign.quantity, available: Math.max(0, campaign.quantity - reserved), shipDate: campaign.ship_date, chargeWindowDays: campaign.charge_window_days, policy: paypalPolicy });
 });
 
 app.post('/api/campaigns/:slug/reservations', async c => {

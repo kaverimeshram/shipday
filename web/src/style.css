@@ -340,6 +340,7 @@ input[type="file"] { padding: 7px 9px; font-size: 14px; }
 .product-image-fallback b { max-width: 320px; color: var(--secondary); font-size: 20px; }
 .buyer-copy h1 { margin: 0 0 6px; font-size: 40px; line-height: 1.04; overflow-wrap: anywhere; }
 .buyer-price { margin: 0 0 24px; font: 16px var(--mono); font-variant-numeric: tabular-nums; }
+.buyer-description { max-width: 520px; margin: 0 0 14px; font-size: 16px; line-height: 1.45; color: var(--secondary); }
 .buyer-price span { color: var(--secondary); font: 14px var(--display); }
 .ship-date-label { margin: 0; color: var(--secondary); font-size: 14px; }
 .buyer-date { margin: 0 0 18px; font-size: clamp(50px, 6vw, 72px); }
