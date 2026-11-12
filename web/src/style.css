@@ -295,6 +295,14 @@ input[type="date"], input[type="number"] { font-family: var(--mono); font-size: 
 .setup-intro .lede { max-width: 460px; font-size: 18px; }
 .setup-intro .intro-note { grid-column: 2; margin: 12px 0 0; padding: 0; border: 0; font-size: 16px; }
 .campaign-index { min-width: 0; }
+.featured-campaign { display: grid; grid-template-columns: 132px minmax(0, 1fr) auto; align-items: center; gap: 20px; min-height: 132px; padding: 14px; border: 1px solid var(--rule); background: var(--buyer-paper); }
+.featured-photo { width: 132px; height: 100px; display: grid; place-items: center; overflow: hidden; border: 1px solid var(--rule); background: var(--warm); }
+.featured-photo img { width: 100%; height: 100%; object-fit: cover; }
+.featured-copy { min-width: 0; }
+.featured-copy .kicker { margin-bottom: 4px; }
+.featured-copy h2 { margin: 0 0 5px; font-size: 26px; line-height: 1.05; overflow-wrap: anywhere; }
+.featured-copy p:last-child { margin: 0; color: var(--secondary); font-size: 15px; }
+.featured-campaign > .button { flex: none; }
 .campaign-index .section-heading { align-items: end; }
 .campaign-index .section-heading h2 { font-size: 30px; }
 .campaign-list { border-bottom: 1px solid var(--rule); }
@@ -349,6 +357,11 @@ input[type="file"] { padding: 7px 9px; font-size: 14px; }
   .setup-page { gap: 24px; padding: 30px 0 48px; }
   .setup-intro { padding: 0 0 18px; }
   .setup-intro h1 { font-size: clamp(42px, 12vw, 56px); }
+  .featured-campaign { grid-template-columns: 76px minmax(0, 1fr); gap: 12px; padding: 10px; }
+  .featured-photo { width: 76px; height: 72px; }
+  .featured-copy h2 { font-size: 20px; }
+  .featured-copy p:last-child { font-size: 12px; }
+  .featured-campaign > .button { grid-column: 2; width: fit-content; }
   .campaign-row { grid-template-columns: 64px minmax(0, 1fr) 62px; gap: 10px; min-height: 86px; padding: 10px 2px; }
   .campaign-thumb, .campaign-featured .campaign-thumb { width: 64px; height: 64px; }
   .campaign-row-name { font-size: 18px; }

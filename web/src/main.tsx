@@ -5,6 +5,7 @@ import './style.css';
 import { chargeWindow, localIsoDate } from './dates';
 
 const BryntumGantt = lazy(async () => ({ default: (await import('@bryntum/gantt-react')).BryntumGantt }));
+const demoSlug = 'commonspoly-cooperative-board-game-0c0165';
 
 type Config = { missing: string[]; bryntumLicense: string | null; cardEntry?: boolean };
 type Campaign = { id: string; slug: string; name: string; imageUrl: string | null; priceCents: number; currency: string; quantity: number; available?: number; reserved?: number; shipDate: string; chargeWindowDays: number };
@@ -66,7 +67,10 @@ function CampaignSetup() {
   const [campaigns, setCampaigns] = useState<CampaignIndexItem[] | null>(null);
   const [listError, setListError] = useState('');
   const [image, setImage] = useState<File | null>(null);
+  const [featured, setFeatured] = useState<CampaignPublic | null>(null);
+  const [featuredError, setFeaturedError] = useState('');
   useEffect(() => { api<CampaignIndexItem[]>('/api/campaigns').then(setCampaigns).catch(cause => setListError(cause instanceof Error ? cause.message : 'Campaigns could not be loaded.')); }, []);
+  useEffect(() => { api<CampaignPublic>(`/api/campaigns/${demoSlug}`).then(setFeatured).catch(cause => setFeaturedError(cause instanceof Error ? cause.message : 'Featured campaign is unavailable.')); }, []);
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault(); setError(''); setSaving(true);
     const form = new FormData(event.currentTarget);
@@ -90,6 +94,7 @@ function CampaignSetup() {
   }
   return <section className="setup-page">
     <div className="setup-intro"><p className="kicker">MERCHANT SHIPPING PLAN</p><h1>Take preorders before your stock is ready.</h1><p className="lede">Buyers save PayPal at reservation. Confirm production and freight as they happen, then charge each wave when it is ready to ship.</p><div className="intro-note"><span className="note-rule" /><p>One plan connects reservations, incoming supply, ship dates, and PayPal charges.</p></div></div>
+    {featured ? <section className="featured-campaign" aria-labelledby="featured-title"><a className="featured-photo" href={`/p/${encodeURIComponent(featured.slug)}`} aria-label={`Open ${featured.name} campaign`}>{featured.imageUrl && <img src={featured.imageUrl} alt="" />}</a><div className="featured-copy"><p className="kicker">FEATURED CAMPAIGN</p><h2 id="featured-title">{featured.name}</h2><p>{money(featured.priceCents, featured.currency)} per unit <span>·</span> Ships {dateLabel(featured.shipDate)}</p></div><a className="button primary" href={`/p/${encodeURIComponent(featured.slug)}`}>View campaign</a></section> : featuredError && <p className="inline-error" role="alert">{featuredError}</p>}
     <section className="campaign-index" aria-labelledby="campaign-index-title"><div className="section-heading"><div><p className="kicker">YOUR CAMPAIGNS</p><h2 id="campaign-index-title">Shipping plans</h2></div><span className="step-mark">{campaigns ? `${campaigns.length} ACTIVE` : 'LOADING'}</span></div>
       {listError && <p className="inline-error" role="alert">{listError}</p>}
       {!campaigns && !listError && <p className="index-state" role="status">Loading campaign plans…</p>}
