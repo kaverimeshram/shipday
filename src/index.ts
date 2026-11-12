@@ -14,6 +14,7 @@ import { chargeRefusal, sameSupply, ganttDependencies, ganttTasks, isChargeEligi
 import { PayPalError, addTracking, orderHasTracker, captureOrder, createCardSetupToken, createPaymentToken, createSetupToken, createVaultOrder, deletePaymentToken, getOrder, getPaymentToken, getPaymentTokenForCancelCheck, getRefund, newRequestId, refundCapture, verifyWebhookSignature, type PayPalOrder } from './paypal.js';
 import { paypalPolicy } from './policy.js';
 import { imageType, storeCampaignImage } from './image.js';
+import { autoProtectCampaign, campaignLedger, refundInputFor, resumePendingRefunds, settleRefund, slippedCharges, sweepAutoProtect, type RefundClient } from './autoprotect.js';
 
 const app = new Hono();
 app.use('/api/*', cors({ origin: publicUrl(), allowMethods: ['GET', 'POST', 'OPTIONS'], allowHeaders: ['Content-Type'], credentials: true }));
@@ -40,7 +41,7 @@ function missingConfig() {
 
 type CampaignRow = {
   id: string; slug: string; name: string; description: string | null; image_url: string | null; price_cents: number; currency: string;
-  quantity: number; ship_date: string; charge_window_days: number; merchant_key_hash: Uint8Array; created_at: string;
+  quantity: number; ship_date: string; charge_window_days: number; merchant_key_hash: Uint8Array; created_at: string; auto_protect: number;
 };
 const campaignBySlug = (slug: string) => db.prepare('SELECT * FROM campaigns WHERE slug = ? AND archived_at IS NULL').get(slug) as CampaignRow | undefined;
 
@@ -61,6 +62,21 @@ function requireCampaign(c: any, slug: string, merchant = false): CampaignRow | 
     setCookie(c, cookieName(campaign.slug), token, { httpOnly: true, sameSite: 'Strict', secure: publicUrl().startsWith('https:'), path: '/', maxAge: 31_536_000 });
   }
   return campaign;
+}
+
+const paypalClient: RefundClient = { refundCapture, getRefund };
+const paypalReady = () => Boolean(process.env.PAYPAL_CLIENT_ID && process.env.PAYPAL_CLIENT_SECRET);
+const waveDates = (campaignId: string) => new Map((db.prepare('SELECT id, ship_date FROM waves WHERE campaign_id = ?').all(campaignId) as { id: string; ship_date: string }[]).map(w => [w.id, w.ship_date]));
+
+// Auto-protect runs after every replan. It refunds in the background and pushes the result over SSE;
+// the 15 s reconciler sweep is the safety net for anything this misses (a crash, a PayPal outage).
+function triggerAutoProtect(campaign: CampaignRow, previousShipDates?: Map<string, string>) {
+  if (!paypalReady()) return;
+  void autoProtectCampaign(paypalClient, campaign.id, { previousShipDates }).then(results => {
+    if (!results.length) return;
+    if (results.some(r => r.status === 'REFUNDED')) refreshWaveData(campaign);
+    emit('refund', campaign.slug);
+  }).catch(error => console.error('Shipday auto-protect failed', { name: error instanceof Error ? error.name : 'Error' }));
 }
 
 function asCampaign(result: CampaignRow | Response): result is CampaignRow {
@@ -218,7 +234,7 @@ async function saveVault(reservation: any, setupId: string): Promise<'RESERVED' 
     return 'CANCELLED';
   }
   // Allocate the new reservation to a wave right away, so the merchant desk shows it without a reload.
-  try { const row = campaignBySlug(campaign.slug); if (row) rebuildPlan(row); } catch { /* the next supply confirm or date move replans */ }
+  try { const row = campaignBySlug(campaign.slug); if (row) { const before = waveDates(row.id); rebuildPlan(row); triggerAutoProtect(row, before); } } catch { /* the next supply confirm or date move replans */ }
   emit('reservation', campaign.slug);
   return 'RESERVED';
 }
@@ -303,8 +319,10 @@ app.get('/api/reservations/:id', c => {
     c.name AS campaign_name, c.image_url AS campaign_image_url, c.ship_date AS campaign_ship_date, c.charge_window_days, c.currency, c.price_cents
     FROM reservations r JOIN campaigns c ON c.id = r.campaign_id LEFT JOIN waves w ON w.id = r.wave_id WHERE r.id = ?`).get(c.req.param('id')) as any;
   if (!row) return c.json({ error: 'Reservation not found.' }, 404);
-  const refund = db.prepare("SELECT refund_id, reason, completed_at FROM refunds WHERE reservation_id = ? AND status = 'COMPLETED' ORDER BY completed_at DESC LIMIT 1").get(row.id) as { refund_id: string; reason: string; completed_at: string } | undefined;
-  return c.json({ refund: refund ? { refundId: refund.refund_id, reason: refund.reason, refundedAt: refund.completed_at } : null, id: row.id, qty: row.qty, position: row.position, status: row.status, captureId: row.capture_id, issue: row.paypal_issue, campaignName: row.campaign_name, imageUrl: row.campaign_image_url, shipDate: row.ship_date || row.campaign_ship_date, chargeWindowDays: row.charge_window_days, currency: row.currency, amountCents: row.price_cents * row.qty, canCancel: ['PENDING', 'RESERVED'].includes(row.status) });
+  const refund = db.prepare("SELECT refund_id, reason, completed_at, source, amount_cents, old_ship_date, new_ship_date FROM refunds WHERE reservation_id = ? AND status = 'COMPLETED' ORDER BY completed_at DESC LIMIT 1").get(row.id) as { refund_id: string; reason: string; completed_at: string; source: string; amount_cents: number | null; old_ship_date: string | null; new_ship_date: string | null } | undefined;
+  const refunding = db.prepare("SELECT status, source FROM refunds WHERE reservation_id = ? AND status IN ('PENDING','FAILED') ORDER BY created_at DESC LIMIT 1").get(row.id) as { status: string; source: string } | undefined;
+  return c.json({ refund: refund ? { refundId: refund.refund_id, reason: refund.reason, refundedAt: refund.completed_at, automatic: refund.source === 'auto', amountCents: refund.amount_cents ?? row.price_cents * row.qty, oldShipDate: refund.old_ship_date, newShipDate: refund.new_ship_date } : null,
+    refundInProgress: refunding && row.status === 'CHARGED' ? refunding.status : null, id: row.id, qty: row.qty, position: row.position, status: row.status, captureId: row.capture_id, issue: row.paypal_issue, campaignName: row.campaign_name, imageUrl: row.campaign_image_url, shipDate: row.ship_date || row.campaign_ship_date, chargeWindowDays: row.charge_window_days, currency: row.currency, amountCents: row.price_cents * row.qty, canCancel: ['PENDING', 'RESERVED'].includes(row.status) });
 });
 
 app.get('/api/campaigns/:slug/desk', c => {
@@ -313,12 +331,17 @@ app.get('/api/campaigns/:slug/desk', c => {
   const waves = db.prepare('SELECT * FROM waves WHERE campaign_id = ? ORDER BY ship_date, number').all(campaign.id) as any[];
   const allocations = campaignAllocations(campaign.id);
   const reservations = db.prepare(`SELECT r.*, a.completed_at AS captured_at, w.ship_date AS wave_ship_date,
-    (SELECT f.refund_id FROM refunds f WHERE f.reservation_id = r.id AND f.status = 'COMPLETED' ORDER BY f.completed_at DESC LIMIT 1) AS refund_id
-    FROM reservations r LEFT JOIN charge_attempts a ON a.capture_id = r.capture_id AND a.status = 'COMPLETED' LEFT JOIN waves w ON w.id = r.wave_id
+    (SELECT f.refund_id FROM refunds f WHERE f.reservation_id = r.id AND f.status = 'COMPLETED' ORDER BY f.completed_at DESC LIMIT 1) AS refund_id,
+    (SELECT f.source FROM refunds f WHERE f.reservation_id = r.id AND f.status = 'COMPLETED' ORDER BY f.completed_at DESC LIMIT 1) AS refund_source,
+    (SELECT f.completed_at FROM refunds f WHERE f.reservation_id = r.id AND f.status = 'COMPLETED' ORDER BY f.completed_at DESC LIMIT 1) AS refunded_at,
+    f2.status AS live_refund_status, f2.issue AS live_refund_issue, f2.attempts AS live_refund_attempts, f2.next_attempt_at AS live_refund_next
+    FROM reservations r LEFT JOIN refunds f2 ON f2.capture_id = r.capture_id AND f2.status IN ('PENDING','FAILED')
+    LEFT JOIN charge_attempts a ON a.capture_id = r.capture_id AND a.status = 'COMPLETED' LEFT JOIN waves w ON w.id = r.wave_id
     WHERE r.campaign_id = ? ORDER BY r.position`).all(campaign.id) as any[];
   const updates = db.prepare('SELECT * FROM supply_updates WHERE campaign_id = ? ORDER BY event_date, confirmed_at').all(campaign.id) as any[];
   const { reserved } = campaignAvailability(campaign.id);
-  return c.json({ campaign: { id: campaign.id, slug: campaign.slug, name: campaign.name, imageUrl: campaign.image_url, priceCents: campaign.price_cents, currency: campaign.currency, quantity: campaign.quantity, shipDate: campaign.ship_date, chargeWindowDays: campaign.charge_window_days }, reserved, available: Math.max(0, campaign.quantity - reserved), waves: waves.map(w => ({ id: w.id, number: w.number, units: w.units, shipDate: w.ship_date, dateOverride: w.date_override })), allocations, reservations: reservations.map(r => ({ id: r.id, email: r.email, qty: r.qty, position: r.position, status: r.status, waveId: r.wave_id, captureId: r.capture_id, orderId: r.paypal_order_id, issue: r.paypal_issue, trackingNumber: r.tracking_number, carrier: r.carrier, capturedAt: r.captured_at, refundId: r.refund_id,
+  return c.json({ campaign: { id: campaign.id, slug: campaign.slug, name: campaign.name, imageUrl: campaign.image_url, priceCents: campaign.price_cents, currency: campaign.currency, quantity: campaign.quantity, shipDate: campaign.ship_date, chargeWindowDays: campaign.charge_window_days, autoProtect: campaign.auto_protect !== 0 }, ledger: campaignLedger(campaign.id), reserved, available: Math.max(0, campaign.quantity - reserved), waves: waves.map(w => ({ id: w.id, number: w.number, units: w.units, shipDate: w.ship_date, dateOverride: w.date_override })), allocations, reservations: reservations.map(r => ({ id: r.id, email: r.email, qty: r.qty, position: r.position, status: r.status, waveId: r.wave_id, captureId: r.capture_id, orderId: r.paypal_order_id, issue: r.paypal_issue, trackingNumber: r.tracking_number, carrier: r.carrier, capturedAt: r.captured_at, refundId: r.refund_id, refundAutomatic: r.refund_source === 'auto', refundedAt: r.refunded_at,
+    refundState: r.status === 'CHARGED' ? r.live_refund_status ?? null : null, refundIssue: r.status === 'CHARGED' ? r.live_refund_issue ?? null : null, refundAttempts: r.live_refund_attempts ?? null, refundNextAttemptAt: r.live_refund_next ?? null,
     outsideWindow: r.status === 'CHARGED' && Boolean(r.captured_at && r.wave_ship_date) && outsideChargeWindow(r.captured_at, r.wave_ship_date, campaign.charge_window_days) })), updates: updates.map(u => ({ id: u.id, units: u.units, milestone: u.milestone, date: u.event_date, origin: u.origin, destination: u.destination, vesselOrCarrier: u.vessel_or_carrier, quotes: JSON.parse(u.quotes), confidence: u.confidence, confirmedAt: u.confirmed_at })), tasks: ganttTasks(waves.map(w => ({ id: w.id, number: w.number, units: w.units, shipDate: w.ship_date })), campaign.charge_window_days), dependencies: ganttDependencies(waves.map(w => ({ id: w.id, number: w.number, units: w.units, shipDate: w.ship_date }))) });
 });
 
@@ -359,7 +382,9 @@ app.post('/api/campaigns/:slug/supply/confirm', async c => {
   db.prepare(`INSERT INTO supply_updates (id, campaign_id, source, units, milestone, event_date, origin, destination, vessel_or_carrier, quotes, confidence, confirmed_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(id, campaign.id, input.source || 'Uploaded document', input.units, input.milestone, input.date, input.origin, input.destination, input.vesselOrCarrier, JSON.stringify(input.quotes), input.confidence, nowIso());
+  const before = waveDates(campaign.id);
   const plan = rebuildPlan(campaign);
+  triggerAutoProtect(campaign, before);
   let explanation: string | null = null;
   try { explanation = await explainPlan({ update: input, waves: plan.waves, allocations: plan.allocations }); } catch { /* the confirmed plan remains available without generated wording */ }
   emit('supply', campaign.slug);
@@ -374,8 +399,10 @@ app.post('/api/campaigns/:slug/waves/:waveId/date', async c => {
   const existing = db.prepare('SELECT id, number, units, ship_date FROM waves WHERE id = ? AND campaign_id = ?').get(c.req.param('waveId'), campaign.id) as any;
   if (!existing) return c.json({ error: 'Wave not found.' }, 404);
   moveWave([{ id: existing.id, number: existing.number, units: existing.units, shipDate: existing.ship_date }], existing.id, parsed.data.shipDate);
+  const before = waveDates(campaign.id);
   db.prepare('UPDATE waves SET ship_date = ?, date_override = ? WHERE id = ?').run(parsed.data.shipDate, parsed.data.shipDate, existing.id);
   const plan = refreshWaveData(campaign);
+  triggerAutoProtect(campaign, before);
   emit('schedule', campaign.slug);
   return c.json(plan);
 });
@@ -400,19 +427,27 @@ app.post('/api/campaigns/:slug/waves/:waveId/refund', async c => {
   if (!asCampaign(campaign)) return campaign;
   const wave = db.prepare('SELECT * FROM waves WHERE id = ? AND campaign_id = ?').get(c.req.param('waveId'), campaign.id) as any;
   if (!wave) return c.json({ error: 'Wave not found.' }, 404);
-  const rows = db.prepare(`SELECT r.id, r.capture_id, a.id AS attempt_id, a.completed_at FROM reservations r
-    JOIN charge_attempts a ON a.capture_id = r.capture_id AND a.status = 'COMPLETED'
-    WHERE r.campaign_id = ? AND r.wave_id = ? AND r.status = 'CHARGED' ORDER BY r.position`).all(campaign.id, wave.id) as { id: string; capture_id: string; attempt_id: string; completed_at: string }[];
-  const late = rows.filter(row => outsideChargeWindow(row.completed_at, wave.ship_date, campaign.charge_window_days));
-  if (!late.length) return c.json({ error: 'No charged reservation in this wave ships outside its charge window.' }, 409);
+  // The merchant button and auto-protect share one refund row per capture, so pressing it while
+  // auto-protect runs (or retrying a failed auto-refund) can never refund the same capture twice.
+  const { campaign: money, rows } = slippedCharges(campaign.id);
+  const late = rows.filter(row => row.wave_id === wave.id);
+  if (!money || !late.length) return c.json({ error: 'No charged reservation in this wave ships outside its charge window.' }, 409);
   const results = [];
-  for (const row of late) {
-    const reason = `Ship date moved to ${wave.ship_date}, more than ${campaign.charge_window_days} days after the ${row.completed_at.slice(0, 10)} charge.`;
-    results.push(await refundCharge(row.id, row.attempt_id, row.capture_id, reason));
-  }
+  for (const row of late) results.push(await settleRefund(paypalClient, refundInputFor(money, row, row.refund_source === 'auto' ? 'auto' : 'manual'), { retryFailed: true }));
   refreshWaveData(campaign);
   emit('refund', campaign.slug);
   return c.json({ results });
+});
+
+app.post('/api/campaigns/:slug/auto-protect', async c => {
+  const campaign = requireCampaign(c, c.req.param('slug'), true);
+  if (!asCampaign(campaign)) return campaign;
+  const parsed = z.object({ enabled: z.boolean() }).safeParse(await c.req.json());
+  if (!parsed.success) return c.json({ error: 'Send enabled: true or false.' }, 400);
+  db.prepare('UPDATE campaigns SET auto_protect = ? WHERE id = ?').run(parsed.data.enabled ? 1 : 0, campaign.id);
+  if (parsed.data.enabled) triggerAutoProtect({ ...campaign, auto_protect: 1 });
+  emit('schedule', campaign.slug);
+  return c.json({ autoProtect: parsed.data.enabled });
 });
 
 app.post('/api/campaigns/:slug/waves/:waveId/tracking/read', async c => {
@@ -575,54 +610,12 @@ async function chargeReservation(campaign: CampaignRow, reservation: any) {
       await new Promise(resolve => setTimeout(resolve, Math.min(500 * 2 ** i, 4000)));
     }
     if (!capture || order.status !== 'COMPLETED') return { id: reservation.id, status: 'CHARGE_PENDING', orderId: order.id, error: 'PayPal has not returned a completed capture yet. Shipday will keep checking.' };
-    db.prepare("UPDATE charge_attempts SET status = 'COMPLETED', capture_id = ?, completed_at = ? WHERE id = ?").run(capture.id, nowIso(), attempt.id);
+    db.prepare("UPDATE charge_attempts SET status = 'COMPLETED', capture_id = ?, completed_at = ?, ship_date_at_charge = (SELECT ship_date FROM waves WHERE id = ?) WHERE id = ?").run(capture.id, nowIso(), reservation.wave_id, attempt.id);
     db.prepare("UPDATE reservations SET status = 'CHARGED', capture_id = ?, paypal_issue = NULL WHERE id = ?").run(capture.id, reservation.id);
     return { id: reservation.id, status: 'CHARGED', orderId: order.id, captureId: capture.id };
   } catch (error) {
     if (error instanceof PayPalError && [400, 403, 422].includes(error.status)) return markDeclined(attempt, reservation, error.issue || error.message);
     return { id: reservation.id, status: 'CHARGE_PENDING', error: error instanceof Error ? error.message : 'PayPal charge is still being reconciled.' };
-  }
-}
-
-async function refundCharge(reservationId: string, attemptId: string, captureId: string, reason: string) {
-  let refund = db.prepare('SELECT * FROM refunds WHERE charge_attempt_id = ?').get(attemptId) as any;
-  if (!refund) {
-    refund = { id: randomUUID(), paypal_request_id: newRequestId(), refund_id: null, status: 'PENDING' };
-    db.prepare(`INSERT INTO refunds (id, reservation_id, charge_attempt_id, capture_id, paypal_request_id, status, reason, created_at)
-      VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?)`).run(refund.id, reservationId, attemptId, captureId, refund.paypal_request_id, reason, nowIso());
-  }
-  if (refund.status !== 'PENDING') return { id: reservationId, status: refund.status === 'COMPLETED' ? 'REFUNDED' : 'REFUND_FAILED', refundId: refund.refund_id, issue: refund.issue };
-  try {
-    if (!refund.refund_id) {
-      const created = await refundCapture(captureId, refund.paypal_request_id);
-      db.prepare('UPDATE refunds SET refund_id = ? WHERE id = ?').run(created.id, refund.id);
-      refund.refund_id = created.id;
-    }
-    for (let i = 0; i < 6; i++) {
-      const read = await getRefund(refund.refund_id);
-      if (read.status === 'COMPLETED') {
-        db.exec('BEGIN IMMEDIATE');
-        try {
-          db.prepare("UPDATE refunds SET status = 'COMPLETED', completed_at = ? WHERE id = ?").run(nowIso(), refund.id);
-          db.prepare(`UPDATE reservations SET status = 'RESERVED', capture_id = NULL, paypal_order_id = NULL, paypal_issue = NULL,
-            tracking_request_id = NULL, tracking_number = NULL, carrier = NULL WHERE id = ? AND status = 'CHARGED'`).run(reservationId);
-          db.exec('COMMIT');
-        } catch (error) { db.exec('ROLLBACK'); throw error; }
-        return { id: reservationId, status: 'REFUNDED', refundId: read.id };
-      }
-      if (['FAILED', 'CANCELLED'].includes(read.status)) {
-        db.prepare("UPDATE refunds SET status = 'FAILED', issue = ? WHERE id = ?").run(read.status_details?.reason || read.status, refund.id);
-        return { id: reservationId, status: 'REFUND_FAILED', refundId: read.id, issue: read.status_details?.reason || read.status };
-      }
-      await new Promise(resolve => setTimeout(resolve, Math.min(500 * 2 ** i, 4000)));
-    }
-    return { id: reservationId, status: 'REFUND_PENDING', refundId: refund.refund_id, error: 'PayPal has not completed the refund yet. Shipday will keep checking.' };
-  } catch (error) {
-    if (error instanceof PayPalError && [400, 403, 404, 422].includes(error.status)) {
-      db.prepare("UPDATE refunds SET status = 'FAILED', issue = ? WHERE id = ?").run(error.issue || error.message, refund.id);
-      return { id: reservationId, status: 'REFUND_FAILED', issue: error.issue || error.message };
-    }
-    return { id: reservationId, status: 'REFUND_PENDING', error: error instanceof Error ? error.message : 'PayPal refund is still being reconciled.' };
   }
 }
 
@@ -648,20 +641,20 @@ async function reconcilePending() {
       const order = await getOrder(attempt.paypal_order_id);
       const capture = order.purchase_units?.flatMap(unit => unit.payments?.captures || []).find(x => x.status === 'COMPLETED');
       if (capture && order.status === 'COMPLETED') {
-        db.prepare("UPDATE charge_attempts SET status = 'COMPLETED', capture_id = ?, completed_at = ? WHERE id = ?").run(capture.id, nowIso(), attempt.id);
+        db.prepare("UPDATE charge_attempts SET status = 'COMPLETED', capture_id = ?, completed_at = ?, ship_date_at_charge = (SELECT w.ship_date FROM reservations r JOIN waves w ON w.id = r.wave_id WHERE r.id = ?) WHERE id = ?").run(capture.id, nowIso(), attempt.reservation_id, attempt.id);
         db.prepare("UPDATE reservations SET status = 'CHARGED', capture_id = ?, paypal_issue = NULL WHERE id = ? AND status != 'SHIPPED'").run(capture.id, attempt.reservation_id);
         emit('charge', attempt.slug);
       }
     } catch (error) { console.error('Shipday charge reconciliation failed', { name: error instanceof Error ? error.name : 'Error' }); }
   }
-  const refunds = db.prepare(`SELECT f.*, c.id AS campaign_id FROM refunds f JOIN reservations r ON r.id = f.reservation_id JOIN campaigns c ON c.id = r.campaign_id WHERE f.status = 'PENDING'`).all() as any[];
-  for (const refund of refunds) {
-    const result = await refundCharge(refund.reservation_id, refund.charge_attempt_id, refund.capture_id, refund.reason);
-    if (result.status === 'REFUNDED') {
-      const campaign = db.prepare('SELECT * FROM campaigns WHERE id = ?').get(refund.campaign_id) as CampaignRow;
-      refreshWaveData(campaign);
-      emit('refund', campaign.slug);
-    }
+  const touched = new Set<string>();
+  for (const { campaignId, result } of await resumePendingRefunds(paypalClient)) if (result.status !== 'REFUND_PENDING') touched.add(campaignId);
+  for (const { campaignId, results } of await sweepAutoProtect(paypalClient)) if (results.some(r => r.status !== 'REFUND_PENDING')) touched.add(campaignId);
+  for (const id of touched) {
+    const campaign = db.prepare('SELECT * FROM campaigns WHERE id = ?').get(id) as CampaignRow | undefined;
+    if (!campaign) continue;
+    refreshWaveData(campaign);
+    emit('refund', campaign.slug);
   }
 }
 
