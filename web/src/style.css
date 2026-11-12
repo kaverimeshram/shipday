@@ -110,6 +110,8 @@ input[type="date"], input[type="number"] { font-family: var(--mono); font-size: 
 .gantt-frame { height: min(58vh, 580px); min-height: 0; margin-top: 16px; overflow: auto; border: 1px solid #c9cccb; background: white; }
 .gantt-frame .b-gantt { min-width: 720px; height: 100%; font-family: var(--display); }
 .gantt-saving { position: absolute; right: 24px; bottom: 48px; padding: 7px 10px; background: var(--ink); color: white; font-size: 13px; }
+.gantt-failed { height: 100%; display: grid; align-content: center; justify-items: start; gap: 10px; padding: 32px; border-left: 3px solid var(--orange); }
+.gantt-failed p { max-width: 460px; margin: 0; }
 .timeline-hint { margin: 12px 0 0; color: var(--secondary); font-size: 14px; }
 .timeline-hint strong { color: var(--ink); }
 .empty-plan { min-height: 230px; display: grid; place-items: center; padding: 32px; text-align: center; }
