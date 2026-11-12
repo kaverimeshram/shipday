@@ -454,16 +454,23 @@ function markDeclined(attempt: any, reservation: any, issue: string) {
 
 async function reconcilePending() {
   if (!process.env.PAYPAL_CLIENT_ID || !process.env.PAYPAL_CLIENT_SECRET) return;
-  const attempts = db.prepare("SELECT a.*, r.campaign_id, r.id AS reservation_id FROM charge_attempts a JOIN reservations r ON r.id = a.reservation_id WHERE a.status = 'PENDING' AND a.paypal_order_id IS NOT NULL").all() as any[];
+  const attempts = db.prepare(`SELECT a.*, r.campaign_id, r.id AS reservation_id, r.vault_id, r.qty, c.price_cents, c.currency, c.slug
+    FROM charge_attempts a JOIN reservations r ON r.id = a.reservation_id JOIN campaigns c ON c.id = r.campaign_id
+    WHERE a.status = 'PENDING'`).all() as any[];
   for (const attempt of attempts) {
     try {
+      if (!attempt.paypal_order_id) {
+        const created = await createVaultOrder({ vaultId: attempt.vault_id, amount: (attempt.price_cents * attempt.qty / 100).toFixed(2), currency: attempt.currency, reservationId: attempt.reservation_id }, attempt.paypal_request_id);
+        db.prepare('UPDATE charge_attempts SET paypal_order_id = ? WHERE id = ?').run(created.id, attempt.id);
+        db.prepare('UPDATE reservations SET paypal_order_id = ? WHERE id = ?').run(created.id, attempt.reservation_id);
+        attempt.paypal_order_id = created.id;
+      }
       const order = await getOrder(attempt.paypal_order_id);
       const capture = order.purchase_units?.flatMap(unit => unit.payments?.captures || []).find(x => x.status === 'COMPLETED');
       if (capture && order.status === 'COMPLETED') {
         db.prepare("UPDATE charge_attempts SET status = 'COMPLETED', capture_id = ?, completed_at = ? WHERE id = ?").run(capture.id, nowIso(), attempt.id);
         db.prepare("UPDATE reservations SET status = 'CHARGED', capture_id = ?, paypal_issue = NULL WHERE id = ? AND status != 'SHIPPED'").run(capture.id, attempt.reservation_id);
-        const campaign = db.prepare('SELECT slug FROM campaigns WHERE id = ?').get(attempt.campaign_id) as { slug: string };
-        emit('charge', campaign.slug);
+        emit('charge', attempt.slug);
       }
     } catch (error) { console.error('Shipday charge reconciliation failed', { name: error instanceof Error ? error.name : 'Error' }); }
   }
