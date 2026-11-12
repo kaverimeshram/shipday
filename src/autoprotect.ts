@@ -34,44 +34,44 @@ export type RefundInput = {
   oldShipDate: string | null; newShipDate: string | null; windowDays: number; chargedAt: string | null;
 };
 export type RefundResult = { id: string; status: 'REFUNDED' | 'REFUND_FAILED' | 'REFUND_PENDING' | 'SKIPPED'; refundId?: string | null; issue?: string | null; error?: string; attempt?: number; already?: boolean };
-export type SettleOptions = { now?: () => Date; retryFailed?: boolean; pollDelayMs?: (i: number) => number; pollTries?: number };
+export type SettleOptions = { now?: () => Date; retryFailed?: boolean; pollDelayMs?: (i: number) => number; pollTries?: number; actor?: 'auto-protect' | 'merchant' };
 
 type RefundRow = { id: string; reservation_id: string; charge_attempt_id: string; capture_id: string; paypal_request_id: string; refund_id: string | null; status: 'PENDING' | 'COMPLETED' | 'FAILED'; reason: string; issue: string | null; source: string; attempts: number; next_attempt_at: string | null; locked_until: string | null };
 
 const refundRow = (attemptId: string) => db.prepare('SELECT * FROM refunds WHERE charge_attempt_id = ?').get(attemptId) as RefundRow | undefined;
 
-function ledger(input: RefundInput, row: RefundRow, kind: 'COMPLETED' | 'FAILED', at: string, paypalStatus: string | null, issue: string | null) {
+function ledger(input: RefundInput, row: RefundRow, kind: 'COMPLETED' | 'FAILED', at: string, paypalStatus: string | null, issue: string | null, actor?: string) {
   const auto = row.source === 'auto';
   const entryKind = auto ? (kind === 'COMPLETED' ? 'AUTO_REFUND' : 'AUTO_REFUND_FAILED') : (kind === 'COMPLETED' ? 'REFUND' : 'REFUND_FAILED');
   const key = kind === 'COMPLETED' ? `refund:${row.id}:completed` : `refund:${row.id}:failed:${row.attempts}`;
   db.prepare(`INSERT OR IGNORE INTO ledger_entries (id, campaign_id, reservation_id, refund_row_id, wave_id, wave_number, capture_id, kind, actor, amount_cents, currency,
     old_ship_date, new_ship_date, window_days, charged_at, reason, paypal_refund_id, paypal_status, issue, attempt, dedupe_key, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .run(randomUUID(), input.campaignId, input.reservationId, row.id, input.waveId, input.waveNumber, input.captureId, entryKind, auto ? 'auto-protect' : 'merchant',
+    .run(randomUUID(), input.campaignId, input.reservationId, row.id, input.waveId, input.waveNumber, input.captureId, entryKind, actor ?? (auto ? 'auto-protect' : 'merchant'),
       input.amountCents, input.currency, input.oldShipDate, input.newShipDate, input.windowDays, input.chargedAt, row.reason, row.refund_id, paypalStatus, issue, row.attempts, key, at);
 }
 
-function complete(input: RefundInput, row: RefundRow, refundId: string, at: string): RefundResult {
+function complete(input: RefundInput, row: RefundRow, refundId: string, at: string, actor?: string): RefundResult {
   db.exec('BEGIN IMMEDIATE');
   try {
     const done = db.prepare("UPDATE refunds SET status = 'COMPLETED', refund_id = ?, completed_at = ?, locked_until = NULL, issue = NULL WHERE id = ? AND status != 'COMPLETED'").run(refundId, at, row.id);
     if (Number(done.changes) > 0) {
       db.prepare(`UPDATE reservations SET status = 'RESERVED', capture_id = NULL, paypal_order_id = NULL, paypal_issue = NULL,
         tracking_request_id = NULL, tracking_number = NULL, carrier = NULL WHERE id = ? AND status = 'CHARGED'`).run(input.reservationId);
-      ledger(input, { ...row, refund_id: refundId }, 'COMPLETED', at, 'COMPLETED', null);
+      ledger(input, { ...row, refund_id: refundId }, 'COMPLETED', at, 'COMPLETED', null, actor);
     }
     db.exec('COMMIT');
   } catch (error) { db.exec('ROLLBACK'); throw error; }
   return { id: input.reservationId, status: 'REFUNDED', refundId, attempt: row.attempts };
 }
 
-function fail(input: RefundInput, row: RefundRow, issue: string, now: Date, paypalStatus: string | null, stopAutoRetry = false): RefundResult {
+function fail(input: RefundInput, row: RefundRow, issue: string, now: Date, paypalStatus: string | null, stopAutoRetry = false, actor?: string): RefundResult {
   const next = new Date(now.getTime() + RETRY_BACKOFF_MS[Math.min(row.attempts - 1, RETRY_BACKOFF_MS.length - 1)]!).toISOString();
   db.exec('BEGIN IMMEDIATE');
   try {
     db.prepare("UPDATE refunds SET status = 'FAILED', issue = ?, next_attempt_at = ?, locked_until = NULL, attempts = CASE WHEN ? THEN MAX(attempts, ?) ELSE attempts END WHERE id = ? AND status = 'PENDING'")
       .run(issue, next, stopAutoRetry ? 1 : 0, MAX_AUTO_ATTEMPTS, row.id);
-    ledger(input, row, 'FAILED', now.toISOString(), paypalStatus, issue);
+    ledger(input, row, 'FAILED', now.toISOString(), paypalStatus, issue, actor);
     db.exec('COMMIT');
   } catch (error) { db.exec('ROLLBACK'); throw error; }
   return { id: input.reservationId, status: 'REFUND_FAILED', refundId: row.refund_id, issue, attempt: row.attempts };
@@ -93,7 +93,7 @@ export async function settleRefund(client: RefundClient, input: RefundInput, opt
     if (row.refund_id) {
       try {
         const read = await client.getRefund(row.refund_id);
-        if (read.status === 'COMPLETED') return complete(input, row, read.id, now().toISOString());
+        if (read.status === 'COMPLETED') return complete(input, row, read.id, now().toISOString(), options.actor);
         if (read.status === 'PENDING') {
           db.prepare("UPDATE refunds SET status = 'PENDING', issue = NULL WHERE id = ? AND status = 'FAILED'").run(row.id);
           return { id: input.reservationId, status: 'REFUND_PENDING', refundId: row.refund_id, attempt: row.attempts };
@@ -122,8 +122,8 @@ export async function settleRefund(client: RefundClient, input: RefundInput, opt
     for (let i = 0; i < tries; i++) {
       // Read the refund back: only PayPal's own COMPLETED readback marks money as returned.
       const read = await client.getRefund(row.refund_id!);
-      if (read.status === 'COMPLETED') return complete(input, row, read.id, now().toISOString());
-      if (['FAILED', 'CANCELLED'].includes(read.status)) return fail(input, row, read.status_details?.reason || read.status, now(), read.status);
+      if (read.status === 'COMPLETED') return complete(input, row, read.id, now().toISOString(), options.actor);
+      if (['FAILED', 'CANCELLED'].includes(read.status)) return fail(input, row, read.status_details?.reason || read.status, now(), read.status, false, options.actor);
       const ms = delay(i);
       if (ms > 0) await new Promise(resolve => setTimeout(resolve, ms));
     }
@@ -133,7 +133,7 @@ export async function settleRefund(client: RefundClient, input: RefundInput, opt
     if (error instanceof PayPalError && [400, 403, 404, 422].includes(error.status)) {
       // PayPal says the capture is already refunded: never try again automatically, a person must reconcile it.
       const settled = ['CAPTURE_FULLY_REFUNDED', 'REFUND_AMOUNT_EXCEEDED'].includes(error.issue || '');
-      return fail(input, row, error.issue || error.message, now(), null, settled);
+      return fail(input, row, error.issue || error.message, now(), null, settled, options.actor);
     }
     release();
     return { id: input.reservationId, status: 'REFUND_PENDING', refundId: row.refund_id, error: error instanceof Error ? error.message : 'PayPal refund is still being reconciled.', attempt: row.attempts };

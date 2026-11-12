@@ -157,3 +157,15 @@ describe('auto-protect', () => {
     expect(reservation(id).status).toBe('CHARGED');
   });
 });
+
+describe('auto-protect ledger actor', () => {
+  it('records a merchant retry of an auto-refund as done by the merchant', async () => {
+    const id = seed(); slip(id);
+    const failing = client({ create: async () => { throw new PayPalError('Refund refused', 422, 'TRANSACTION_REFUSED'); } });
+    await autoProtectCampaign(failing, id, fast);
+    const { campaign, rows } = slippedCharges(id);
+    const result = await settleRefund(client(), refundInputFor(campaign!, rows[0]!, 'auto'), { ...fast, retryFailed: true, actor: 'merchant' });
+    expect(result.status).toBe('REFUNDED');
+    expect(campaignLedger(id).map(e => [e.kind, e.actor])).toEqual(expect.arrayContaining([['AUTO_REFUND_FAILED', 'auto-protect'], ['AUTO_REFUND', 'merchant']]));
+  });
+});
