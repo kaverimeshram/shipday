@@ -166,7 +166,8 @@ function Merchant({ slug, config }: { slug: string; config: Config | null }) {
     setBusy(`charge:${wave.id}`); setError(''); setNotice('');
     try {
       const result = await api<{ results: { id: string; status: string; captureId?: string; issue?: string; error?: string }[] }>(`/api/campaigns/${encodeURIComponent(slug)}/waves/${wave.id}/charge`, { method: 'POST' });
-      setNotice(`Charge run finished. ${result.results.filter(r => r.status === 'CHARGED').length} completed, ${result.results.filter(r => r.status === 'DECLINED').length} declined.`); await load();
+      const pending = result.results.filter(r => r.status === 'CHARGE_PENDING').length;
+      setNotice(`Charge run finished. ${result.results.filter(r => r.status === 'CHARGED').length} completed, ${result.results.filter(r => r.status === 'DECLINED').length} declined${pending ? `, ${pending} waiting on PayPal to confirm the capture` : ''}.`); await load();
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Wave could not be charged.'); }
     finally { setBusy(''); }
   }
