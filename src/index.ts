@@ -433,7 +433,7 @@ app.post('/api/campaigns/:slug/waves/:waveId/refund', async c => {
   const late = rows.filter(row => row.wave_id === wave.id);
   if (!money || !late.length) return c.json({ error: 'No charged reservation in this wave ships outside its charge window.' }, 409);
   const results = [];
-  for (const row of late) results.push(await settleRefund(paypalClient, refundInputFor(money, row, row.refund_source === 'auto' ? 'auto' : 'manual'), { retryFailed: true }));
+  for (const row of late) results.push(await settleRefund(paypalClient, refundInputFor(money, row, row.refund_source === 'auto' ? 'auto' : 'manual'), { retryFailed: true, actor: 'merchant' }));
   refreshWaveData(campaign);
   emit('refund', campaign.slug);
   return c.json({ results });
