@@ -1,6 +1,6 @@
 # Shipday: pre-orders charged on the day they ship
 
-Read first: `docs/COMMON-SPEC.md`, `docs/PAYPAL-API.md` (copied into this repo).
+PayPal API reference: `docs/PAYPAL-API.md`.
 
 ## Who
 Indie board game publishers, small-batch hardware makers, and creators taking pre-orders. Charging at order time and shipping months later is how sellers get funds frozen and how buyers lose trust (@MystiqueMide: "PayPal has a rule most pre-order sellers find out about the hard way. You can only take the money if you ship within 20 days", naming Leder Games and Portal Games). First task in this build: find PayPal's current pre-order or delayed-shipment rule on paypal.com (user agreement, acceptable use, or help center), record the exact sentence and URL in `src/policy.ts`. If no PayPal page states a day count, the window is a merchant setting labelled "charge no earlier than N days before ship date", default 20, with no claim that PayPal requires it.

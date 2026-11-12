@@ -14,3 +14,7 @@ BUILD-REPORT.md
 .codex-prompt-ui.txt
 .codex-*
 BUILD-REPORT*.md
+
+# internal build contract and agent context
+docs/COMMON-SPEC.md
+.agentctx/
