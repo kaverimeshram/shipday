@@ -10,3 +10,4 @@ BUILD-REPORT.md
 .codex-last.md
 *.log
 .DS_Store
+.codex-prompt.txt

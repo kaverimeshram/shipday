@@ -1,0 +1,11 @@
+node_modules
+data
+.env
+.env.*
+.git
+.progress
+*.log
+BUILD-REPORT.md
+.codex-*
+web/dist
+dist

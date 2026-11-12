@@ -1,0 +1,25 @@
+app = "shipday-preorders"
+primary_region = "iad"
+
+[build]
+
+[env]
+  PORT = "8787"
+  DATA_DIR = "/data"
+  PAYPAL_ENV = "sandbox"
+  PUBLIC_URL = "https://shipday-preorders.fly.dev"
+
+[mounts]
+  source = "data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8787
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
