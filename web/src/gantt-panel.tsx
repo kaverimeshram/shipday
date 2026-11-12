@@ -5,7 +5,7 @@ const BryntumGantt = lazy(async () => ({ default: (await import('@bryntum/gantt-
 // The Bryntum React wrapper re-applies any prop whose reference changes, and rebuilding
 // the locked subgrid throws "Id ... already in use". Every object prop must stay stable:
 // config objects are created once per mount and call the latest page callbacks through refs.
-const subGrids = { narrow: { locked: { width: 176 } }, wide: { locked: { width: 300 } } };
+const subGrids = { narrow: { locked: { width: 150 } }, wide: { locked: { width: 300 } } };
 const day = 86_400_000;
 
 export type GanttDrop = { id: string; startDate?: Date }[];
@@ -47,11 +47,14 @@ function Gantt({ tasks, dependencies, shipDates, onDrop, timeRanges, nameCell, t
     const times = span.split(',').map(d => Date.parse(`${d}T00:00:00Z`)).filter(Number.isFinite);
     const now = Date.now();
     if (!times.length) return [new Date(now - 7 * day), new Date(now + 60 * day)];
-    return [new Date(Math.min(now - 14 * day, ...times.map(t => t - 38 * day))), new Date(Math.max(...times) + 45 * day)];
-  }, [span]);
+    // Desktop opens on the plan (38 days before the earliest ship date, or a week before today if earlier);
+    // phones open on the week containing today so the today line and an open charge window are in view.
+    const start = narrow ? now - day : Math.min(now - 7 * day, ...times.map(t => t - 38 * day));
+    return [new Date(start), new Date(Math.max(now + 42 * day, ...times.map(t => t + 45 * day)))];
+  }, [span, narrow]);
   const drop = useLatest(onDrop); const name = useLatest(nameCell); const tip = useLatest(tooltip); const dragTip = useLatest(dragTooltip);
   const onTaskDrop = useCallback((event: DropEvent) => { drop.current(event.taskRecords.map(record => ({ id: String(record.id), startDate: record.startDate ? new Date(String(record.startDate)) : undefined }))); }, [drop]);
-  const [columns] = useState(() => [{ type: 'name', field: 'name', text: 'WAVE / MILESTONE', width: narrow ? 176 : 300,
+  const [columns] = useState(() => [{ type: 'name', field: 'name', text: 'WAVE / MILESTONE', width: narrow ? 150 : 300,
     renderer: ({ record, value }: { record: { id: unknown }; value: unknown }) => name.current ? name.current(String(record.id), value, narrow) : String(value ?? '') }]);
   const [timeRangesFeature] = useState(() => ({ showCurrentTimeLine: { name: 'Today' } }));
   const [taskTooltipFeature] = useState(() => ({ template: ({ taskRecord }: { taskRecord: GanttTip }) => tip.current ? tip.current(taskRecord) : String(taskRecord.name ?? '') }));
