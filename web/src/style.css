@@ -493,3 +493,22 @@ input[type="file"] { padding: 7px 9px; font-size: 14px; }
 .merchant-product-thumb { width: 68px; height: 68px; }
 .workbench-head { margin: 12px 0 16px; padding: 12px 20px; }
 .gantt-frame .b-time-ranges-header-canvas .charge-range { display: none; }
+.recover-state { display: grid; gap: 8px; justify-items: start; margin: 16px 0; padding: 18px 20px; border: 1px solid #a45b2d; background: #fff8f1; }
+.recover-state strong { font-size: 20px; }
+.recover-state p { margin: 0; color: var(--secondary); }
+.alert-info { margin: 0 0 16px; border-color: var(--blue); background: #eef3f5; color: #23404f; }
+.alert-info .alert-tag { background: var(--blue); }
+.empty-plan .button { margin-top: 14px; }
+.setup-intro { grid-template-columns: minmax(0, 1fr) minmax(300px, .62fr); align-items: start; row-gap: 14px; }
+.setup-intro h1 { grid-column: 1; }
+.setup-intro .lede { grid-column: 1; max-width: 620px; }
+.intro-actions { grid-column: 1; display: flex; flex-wrap: wrap; gap: 10px; }
+.intro-actions .button.primary { min-height: 48px; padding-inline: 22px; font-size: 18px; }
+.judge-path { grid-column: 2; grid-row: 2 / span 3; align-self: stretch; padding: 16px 18px; border: 1px solid var(--rule); border-top: 3px solid var(--orange); background: var(--buyer-paper); }
+.judge-path ol { margin: 0; padding-left: 20px; display: grid; gap: 9px; font-size: 15px; line-height: 1.35; }
+.judge-path code { font-size: 12px; overflow-wrap: anywhere; }
+.featured-loading { min-height: 132px; background: var(--buyer-paper); }
+@media (max-width: 900px) {
+  .setup-intro { grid-template-columns: minmax(0, 1fr); }
+  .judge-path { grid-column: 1; grid-row: auto; }
+}
