@@ -8,12 +8,12 @@ The buyer gets one clear ship date and a private reservation page. The merchant 
 
 Live app: https://shipday-preorders.fly.dev
 
-1. Create a campaign: any product, price and quantity, estimated ship date 3 December 2026, charge window 30 days. Shipday opens the merchant plan for it.
+1. Create a campaign: any product, price and quantity, estimated ship date 3 December 2026, and keep the default 20-day charge window (a merchant setting; see `src/policy.ts`). Shipday opens the merchant plan for it. The merchant plan opens only in the browser that created the campaign.
 2. Open its buyer link, `/p/<slug>`, and reserve with a PayPal sandbox buyer. PayPal saves the wallet through Vault. Nothing is charged.
 3. In the merchant plan, paste `examples/freight-update-example.txt` into Supply in and press Read update. Each extracted field (480 units, departed, 12 Nov, Yantian, Long Beach, MSC ARIANE) sits beside the sentence it came from. Confirm it.
 4. Wave 1 lands on the Gantt with ship day 3 December: the 12 Nov departure plus the 21 day freight lead. The orange bar is the open charge window. Drag the Ship bar into the past and the charge button locks with the reason; drag it forward and the window reopens.
 5. Charge Wave 1. Each reservation shows its PayPal capture id once PayPal reads the capture back as COMPLETED, and the buyer's `/r/<id>` page becomes a receipt.
-6. Drag the charged wave's Ship bar more than 30 days past today. The Gantt row turns red, "Charged too early: refund due", and the wave card offers the refund. Refund it: each reservation shows its PayPal refund id, returns to Reserved on the same saved PayPal, and its buyer page reads "Refunded. Still reserved." Drag the bar back and charge again.
+6. Drag the charged wave's Ship bar more than 20 days past the charge date (the campaign's charge window). The Gantt row turns red, "Charged too early: refund due", and the wave card offers the refund. Refund it: each reservation shows its PayPal refund id, returns to Reserved on the same saved PayPal, and its buyer page reads "Refunded. Still reserved." Drag the bar back and charge again.
 7. Paste `examples/dispatch-confirmation-example.txt` into Read dispatch confirmation. Order #1's carrier and tracking number fill in with the email line they came from. Save, and Shipday posts the tracker to the PayPal order and reads it back.
 
 ## PayPal and AI
