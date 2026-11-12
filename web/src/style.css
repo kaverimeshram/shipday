@@ -107,7 +107,7 @@ input[type="date"], input[type="number"] { font-family: var(--mono); font-size: 
 .legend span { display: inline-flex; align-items: center; gap: 7px; }
 .dot { width: 11px; height: 11px; display: inline-block; border-radius: 2px; background: #b7c2c6; }
 .dot.production { background: #8da4ad; }.dot.freight { background: #557789; }.dot.charge { background: var(--orange); }.dot.shipped { background: var(--green); }
-.gantt-frame { height: min(58vh, 580px); min-height: 360px; margin-top: 16px; overflow: auto; border: 1px solid #c9cccb; background: white; }
+.gantt-frame { height: min(58vh, 580px); min-height: 0; margin-top: 16px; overflow: auto; border: 1px solid #c9cccb; background: white; }
 .gantt-frame .b-gantt { min-width: 720px; height: 100%; font-family: var(--display); }
 .gantt-saving { position: absolute; right: 24px; bottom: 48px; padding: 7px 10px; background: var(--ink); color: white; font-size: 13px; }
 .timeline-hint { margin: 12px 0 0; color: var(--secondary); font-size: 14px; }
@@ -288,7 +288,7 @@ input[type="date"], input[type="number"] { font-family: var(--mono); font-size: 
 .card-reserve summary { cursor: pointer; font-size: 14px; text-decoration: underline; }
 .card-reserve .reserve-form { margin-top: 12px; }
 
-.setup-page { display: grid; gap: 32px; padding: 48px 0 80px; }
+.setup-page { display: grid; grid-template-columns: minmax(0, 1fr); gap: 32px; padding: 48px 0 80px; }
 .setup-intro { display: grid; grid-template-columns: minmax(0, 1fr) minmax(250px, .55fr); column-gap: 48px; align-items: end; padding: 8px 0 24px; border-bottom: 1px solid var(--rule); }
 .setup-intro .kicker { grid-column: 1 / -1; }
 .setup-intro h1 { max-width: 770px; margin: 0; font-size: clamp(44px, 5vw, 68px); line-height: .98; }
