@@ -21,6 +21,36 @@ describe('reservation wave planning', () => {
   it('rejects a zero reservation quantity instead of silently assigning it', () => {
     expect(() => planWaves([], [{ id: 'r', qty: 0, position: 1 }])).toThrow('positive integer');
   });
+
+  it('keeps a captured reservation in its original wave when later supply shifts dates', () => {
+    const first = planWaves(
+      [{ id: 'early', units: 2, milestone: 'departed', eventDate: '2026-11-01' }],
+      [{ id: 'captured', qty: 2, position: 1 }],
+    );
+    const updated = planWaves(
+      [
+        { id: 'new-earlier', units: 2, milestone: 'departed', eventDate: '2026-10-20' },
+        { id: 'early', units: 2, milestone: 'departed', eventDate: '2026-11-15' },
+        { id: 'later', units: 2, milestone: 'departed', eventDate: '2026-12-01' },
+      ],
+      [{ id: 'captured', qty: 2, position: 1, status: 'CHARGED', captureId: 'capture-1', allocations: first.allocations }],
+    );
+
+    expect(updated.allocations.filter(a => a.reservationId === 'captured')).toEqual(first.allocations);
+    expect(updated.waves.find(w => w.id === 'early')?.shipDate).not.toBe(first.waves[0]?.shipDate);
+  });
+
+  it('does not allocate pinned units from current supply a second time', () => {
+    const updated = planWaves(
+      [{ id: 'wave', units: 2, milestone: 'departed', eventDate: '2026-11-15' }],
+      [
+        { id: 'captured', qty: 2, position: 1, status: 'CHARGED', captureId: 'capture-1', allocations: [{ reservationId: 'captured', waveId: 'wave', qty: 2 }] },
+        { id: 'next', qty: 2, position: 2 },
+      ],
+    );
+
+    expect(updated.allocations.find(a => a.reservationId === 'next')).toEqual({ reservationId: 'next', waveId: 'wave', qty: 2 });
+  });
 });
 
 describe('charge window', () => {
@@ -41,6 +71,10 @@ describe('charge idempotency and cancellation', () => {
     expect(chargeRefusal('DECLINED', false)).toBeNull();
     expect(chargeRefusal('CHARGED', true)).toContain('already been charged');
     expect(chargeRefusal('RESERVED', true)).toContain('already been charged');
+  });
+
+  it('refuses to charge a reservation while a charge attempt is in flight', () => {
+    expect(chargeRefusal('CHARGE_PENDING', false)).toContain('already been charged');
   });
 
   it('allows cancellation only before charge begins', () => {
