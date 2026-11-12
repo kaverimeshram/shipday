@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
   price_cents INTEGER NOT NULL CHECK(price_cents > 0), currency TEXT NOT NULL,
   quantity INTEGER NOT NULL CHECK(quantity > 0), ship_date TEXT NOT NULL,
   charge_window_days INTEGER NOT NULL DEFAULT 20 CHECK(charge_window_days >= 0), merchant_key_hash TEXT NOT NULL,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL, archived_at TEXT
 );
 CREATE TABLE IF NOT EXISTS reservations (
   id TEXT PRIMARY KEY, campaign_id TEXT NOT NULL REFERENCES campaigns(id),
@@ -61,6 +61,10 @@ CREATE TABLE IF NOT EXISTS refunds (
   reason TEXT NOT NULL, issue TEXT, created_at TEXT NOT NULL, completed_at TEXT
 );
 `);
+
+if (!(db.prepare('PRAGMA table_info(campaigns)').all() as { name: string }[]).some(c => c.name === 'archived_at')) {
+  db.exec('ALTER TABLE campaigns ADD COLUMN archived_at TEXT');
+}
 
 if (!(db.prepare('PRAGMA table_info(reservations)').all() as { name: string }[]).some(c => c.name === 'payment_kind')) {
   db.exec("ALTER TABLE reservations ADD COLUMN payment_kind TEXT NOT NULL DEFAULT 'paypal' CHECK(payment_kind IN ('paypal','card'))");

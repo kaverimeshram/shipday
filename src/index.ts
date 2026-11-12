@@ -3,6 +3,7 @@ import { streamSSE } from 'hono/streaming';
 import { getCookie, setCookie } from 'hono/cookie';
 import { cors } from 'hono/cors';
 import { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -12,6 +13,7 @@ import { AIError, extractShipments, extractSupply, explainPlan, type SupplyExtra
 import { chargeRefusal, ganttDependencies, ganttTasks, isChargeEligible, matchShipments, milestones, moveWave, outsideChargeWindow, planWaves, type Milestone } from './domain.js';
 import { PayPalError, addTracking, orderHasTracker, captureOrder, createCardSetupToken, createPaymentToken, createSetupToken, createVaultOrder, deletePaymentToken, getOrder, getPaymentToken, getPaymentTokenForCancelCheck, getRefund, newRequestId, refundCapture, verifyWebhookSignature, type PayPalOrder } from './paypal.js';
 import { paypalPolicy } from './policy.js';
+import { imageType, storeCampaignImage } from './image.js';
 
 const app = new Hono();
 app.use('/api/*', cors({ origin: publicUrl(), allowMethods: ['GET', 'POST', 'OPTIONS'], allowHeaders: ['Content-Type'], credentials: true }));
@@ -40,7 +42,7 @@ type CampaignRow = {
   id: string; slug: string; name: string; image_url: string | null; price_cents: number; currency: string;
   quantity: number; ship_date: string; charge_window_days: number; merchant_key_hash: Uint8Array; created_at: string;
 };
-const campaignBySlug = (slug: string) => db.prepare('SELECT * FROM campaigns WHERE slug = ?').get(slug) as CampaignRow | undefined;
+const campaignBySlug = (slug: string) => db.prepare('SELECT * FROM campaigns WHERE slug = ? AND archived_at IS NULL').get(slug) as CampaignRow | undefined;
 
 function hasMerchantKey(c: any, campaign: CampaignRow) {
   const token = getCookie(c, cookieName(campaign.slug));
@@ -53,7 +55,11 @@ function hasMerchantKey(c: any, campaign: CampaignRow) {
 function requireCampaign(c: any, slug: string, merchant = false): CampaignRow | Response {
   const campaign = campaignBySlug(slug);
   if (!campaign) return c.json({ error: 'Campaign not found.' }, 404);
-  if (merchant && !hasMerchantKey(c, campaign)) return c.json({ error: 'Open this campaign in the merchant browser that created it.' }, 401);
+  if (merchant) {
+    const token = getCookie(c, cookieName(campaign.slug));
+    if (!token || !hasMerchantKey(c, campaign)) return c.json({ error: 'Open this campaign in the merchant browser that created it.' }, 401);
+    setCookie(c, cookieName(campaign.slug), token, { httpOnly: true, sameSite: 'Strict', secure: publicUrl().startsWith('https:'), path: '/', maxAge: 31_536_000 });
+  }
   return campaign;
 }
 
@@ -86,6 +92,34 @@ const TrackingInput = z.object({ items: z.array(z.object({ reservationId: z.uuid
 app.get('/api/health', c => c.json({ ok: true, missing: missingConfig() }));
 app.get('/api/config', c => c.json({ missing: missingConfig(), bryntumLicense: process.env.BRYNTUM_LICENSE || null, cardEntry: process.env.PAYPAL_ENV !== 'live' }));
 
+app.get('/media/:id', async c => {
+  const id = c.req.param('id');
+  if (!/^[0-9a-f-]{36}$/i.test(id)) return c.text('Not found', 404);
+  try {
+    const bytes = await readFile(resolve(process.env.DATA_DIR || './data', 'uploads', id));
+    const type = imageType(bytes);
+    if (!type) return c.text('Not found', 404);
+    return new Response(bytes, { headers: { 'Content-Type': type, 'Cache-Control': 'public, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff' } });
+  } catch { return c.text('Not found', 404); }
+});
+
+app.get('/api/campaigns', c => {
+  const rows = db.prepare(`SELECT c.*, COALESCE(SUM(CASE WHEN r.status != 'CANCELLED' THEN r.qty ELSE 0 END), 0) AS reserved
+    FROM campaigns c LEFT JOIN reservations r ON r.campaign_id = c.id WHERE c.archived_at IS NULL
+    GROUP BY c.id ORDER BY c.created_at DESC`).all() as any[];
+  return c.json(rows.filter(row => hasMerchantKey(c, row)).map(row => ({ id: row.id, slug: row.slug, name: row.name, imageUrl: row.image_url,
+    priceCents: row.price_cents, currency: row.currency, quantity: row.quantity, shipDate: row.ship_date, chargeWindowDays: row.charge_window_days,
+    reserved: row.reserved, available: Math.max(0, row.quantity - row.reserved) })));
+});
+
+app.post('/api/campaigns/:slug/archive', c => {
+  const campaign = requireCampaign(c, c.req.param('slug'), true);
+  if (!asCampaign(campaign)) return campaign;
+  if (campaignAvailability(campaign.id).reserved > 0) return c.json({ error: 'A campaign with active reservations cannot be archived.' }, 409);
+  db.prepare('UPDATE campaigns SET archived_at = ? WHERE id = ?').run(nowIso(), campaign.id);
+  return c.json({ status: 'ARCHIVED' });
+});
+
 app.get('/api/events', c => streamSSE(c, async stream => {
   const send = (message: unknown) => { void stream.writeSSE({ event: 'update', data: JSON.stringify(message) }); };
   clients.add(send);
@@ -95,18 +129,37 @@ app.get('/api/events', c => streamSSE(c, async stream => {
   await done;
 }));
 
-app.post('/api/campaigns', async c => {
-  const parsed = CampaignInput.safeParse(await c.req.json());
+app.post('/api/campaigns', bodyLimit({ maxSize: 5 * 1024 * 1024 + 65_536 }), async c => {
+  const multipart = c.req.header('content-type')?.startsWith('multipart/form-data');
+  let body: any;
+  if (multipart) {
+    const form = await c.req.formData();
+    body = Object.fromEntries(form.entries());
+  } else body = await c.req.json();
+  if (multipart) {
+    for (const key of ['priceCents', 'quantity', 'chargeWindowDays']) body[key] = Number(body[key]);
+  }
+  const image = multipart && body.image instanceof File && body.image.size ? body.image : null;
+  delete body.image;
+  const parsed = CampaignInput.safeParse(body);
   if (!parsed.success) return c.json({ error: parsed.error.issues[0]?.message || 'Campaign details are invalid.' }, 400);
   const input = parsed.data;
+  let storedImage: Awaited<ReturnType<typeof storeCampaignImage>> | null = null;
+  try { if (image) storedImage = await storeCampaignImage(image); }
+  catch (error) { return c.json({ error: error instanceof Error ? error.message : 'Product image could not be stored.' }, 400); }
   const id = randomUUID();
   const slug = `${input.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 35)}-${randomBytes(3).toString('hex')}`;
   const merchantKey = randomBytes(32).toString('base64url');
-  db.prepare(`INSERT INTO campaigns (id, slug, name, image_url, price_cents, currency, quantity, ship_date, charge_window_days, merchant_key_hash, created_at)
+  try {
+    db.prepare(`INSERT INTO campaigns (id, slug, name, image_url, price_cents, currency, quantity, ship_date, charge_window_days, merchant_key_hash, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .run(id, slug, input.name, input.imageUrl || null, input.priceCents, input.currency, input.quantity, input.shipDate, input.chargeWindowDays, hash(merchantKey), nowIso());
+    .run(id, slug, input.name, storedImage?.path || input.imageUrl || null, input.priceCents, input.currency, input.quantity, input.shipDate, input.chargeWindowDays, hash(merchantKey), nowIso());
+  } catch (error) {
+    if (storedImage) await storedImage.cleanup();
+    throw error;
+  }
   setCookie(c, cookieName(slug), merchantKey, {
-    httpOnly: true, sameSite: 'Strict', secure: publicUrl().startsWith('https:'), path: `/api/campaigns/${slug}`, maxAge: 31_536_000,
+    httpOnly: true, sameSite: 'Strict', secure: publicUrl().startsWith('https:'), path: '/', maxAge: 31_536_000,
   });
   emit('campaign', slug);
   return c.json({ id, slug, path: `/merchant/${slug}` }, 201);
@@ -245,11 +298,11 @@ app.post('/api/reservations/:id/cancel', async c => {
 
 app.get('/api/reservations/:id', c => {
   const row = db.prepare(`SELECT r.id, r.qty, r.position, r.status, r.capture_id, r.paypal_issue, r.wave_id, w.ship_date,
-    c.name AS campaign_name, c.ship_date AS campaign_ship_date, c.charge_window_days, c.currency, c.price_cents
+    c.name AS campaign_name, c.image_url AS campaign_image_url, c.ship_date AS campaign_ship_date, c.charge_window_days, c.currency, c.price_cents
     FROM reservations r JOIN campaigns c ON c.id = r.campaign_id LEFT JOIN waves w ON w.id = r.wave_id WHERE r.id = ?`).get(c.req.param('id')) as any;
   if (!row) return c.json({ error: 'Reservation not found.' }, 404);
   const refund = db.prepare("SELECT refund_id, reason, completed_at FROM refunds WHERE reservation_id = ? AND status = 'COMPLETED' ORDER BY completed_at DESC LIMIT 1").get(row.id) as { refund_id: string; reason: string; completed_at: string } | undefined;
-  return c.json({ refund: refund ? { refundId: refund.refund_id, reason: refund.reason, refundedAt: refund.completed_at } : null, id: row.id, qty: row.qty, position: row.position, status: row.status, captureId: row.capture_id, issue: row.paypal_issue, campaignName: row.campaign_name, shipDate: row.ship_date || row.campaign_ship_date, chargeWindowDays: row.charge_window_days, currency: row.currency, amountCents: row.price_cents * row.qty, canCancel: ['PENDING', 'RESERVED'].includes(row.status) });
+  return c.json({ refund: refund ? { refundId: refund.refund_id, reason: refund.reason, refundedAt: refund.completed_at } : null, id: row.id, qty: row.qty, position: row.position, status: row.status, captureId: row.capture_id, issue: row.paypal_issue, campaignName: row.campaign_name, imageUrl: row.campaign_image_url, shipDate: row.ship_date || row.campaign_ship_date, chargeWindowDays: row.charge_window_days, currency: row.currency, amountCents: row.price_cents * row.qty, canCancel: ['PENDING', 'RESERVED'].includes(row.status) });
 });
 
 app.get('/api/campaigns/:slug/desk', c => {
