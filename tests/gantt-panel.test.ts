@@ -25,7 +25,8 @@ async function mount() {
   const render = (draft: string) => act(async () => {
     root.render(React.createElement('section', null,
       React.createElement('textarea', { value: draft, readOnly: true }),
-      React.createElement(GanttPanel, { tasks, dependencies, shipDates, onDrop: () => {} })));
+      // New callbacks on every render, as the merchant page passes them.
+      React.createElement(GanttPanel, { tasks, dependencies, shipDates, onDrop: () => {}, nameCell: (_id: string, value: unknown) => String(value), tooltip: () => draft, dragTooltip: () => draft })));
   });
   return { host, render };
 }
@@ -37,7 +38,9 @@ describe('Gantt panel', () => {
     await render('a');
     const [first, last] = [seen[0]!, seen.at(-1)!];
     expect(seen.length).toBeGreaterThan(1);
-    for (const key of ['subGridConfigs', 'columns', 'startDate', 'endDate', 'onTaskDrop']) expect(last[key], key).toBe(first[key]);
+    // Stable config objects still call the latest page callbacks.
+    expect((last.taskTooltipFeature as { template: (a: unknown) => string }).template({ taskRecord: { id: 'x' } })).toBe('a');
+    for (const key of ['subGridConfigs', 'columns', 'startDate', 'endDate', 'onTaskDrop', 'timeRanges', 'timeRangesFeature', 'taskTooltipFeature', 'taskDragFeature']) expect(last[key], key).toBe(first[key]);
   });
 
   it('keeps the rest of the page when the Gantt throws', async () => {
