@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { canCancel, chargeRefusal, ganttDependencies, ganttTasks, isChargeEligible, moveWave, planWaves } from '../src/domain.js';
-import { localIsoDate } from '../web/src/dates.js';
+import { chargeWindow, localIsoDate } from '../web/src/dates.js';
 
 describe('reservation wave planning', () => {
   it('allocates capacity in reservation order across dated waves', () => {
@@ -82,5 +82,16 @@ describe('gantt timeline', () => {
     process.env.TZ = 'Asia/Kolkata';
     try { expect(localIsoDate(new Date(2026, 11, 3))).toBe('2026-12-03'); }
     finally { process.env.TZ = zone; }
+  });
+});
+
+describe('merchant charge window state', () => {
+  const now = new Date('2026-11-12T10:00:00Z');
+  it('marks a window as closed once ship day has passed', () => {
+    expect(chargeWindow('2026-11-10', 30, now)).toEqual({ eligible: false, opens: '2026-10-11', closed: true });
+  });
+  it('marks a future window as not yet open', () => {
+    expect(chargeWindow('2027-01-12', 30, now)).toEqual({ eligible: false, opens: '2026-12-13', closed: false });
+    expect(chargeWindow('2026-12-03', 30, now).eligible).toBe(true);
   });
 });
