@@ -91,7 +91,7 @@ export async function explainPlan(data: unknown): Promise<string> {
 
 async function callValidated<T>(key: string, model: string, parts: unknown[], name: string, jsonSchema: unknown, parse: (raw: string) => T): Promise<T> {
   let correction = '';
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < 3; attempt++) {
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', 'X-Title': 'Shipday' },
       signal: AbortSignal.timeout(45_000),
@@ -106,7 +106,7 @@ async function callValidated<T>(key: string, model: string, parts: unknown[], na
       return parse(String(body.choices?.[0]?.message?.content ?? ''));
     } catch (error) {
       correction = error instanceof z.ZodError ? error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ') : error instanceof Error ? error.message : String(error);
-      if (attempt) throw new AIError(`Extraction could not be validated: ${correction}`);
+      if (attempt === 2) throw new AIError(`Extraction could not be validated: ${correction}`);
     }
   }
   throw new AIError('Extraction could not be validated.');
